@@ -3,19 +3,22 @@ import re
 import html
 import io
 import json
+import base64
+import uuid
 import feedparser
 import telebot
 import requests
+import yt_dlp
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
-from groq import Groq
 
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
+GIGACHAT_CLIENT_SECRET = os.getenv("GIGACHAT_CLIENT_SECRET")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -25,8 +28,6 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"   # вернули доступную модель
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -72,9 +73,9 @@ def clean_html(raw_html):
     soup = BeautifulSoup(raw_html, "lxml")
     for script in soup(["script", "style"]):
         script.decompose()
-    text = soup.get_text(separator=" ")
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    text = soup.get_text(separator="\n")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
 
 def make_absolute(url, base_domain):
     if url.startswith('//'):
@@ -103,9 +104,9 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    main_content = soup.select_one('div.editor-body')
+    main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
-        main_content = soup.select_one('div.news_text')
+        main_content = soup.select_one('div.news_text')  # КГ-Портал
 
     if not main_content:
         selectors = [
@@ -252,7 +253,6 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # 1. Прямые видеофайлы (mp4/webm)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -275,7 +275,6 @@ def extract_video_url_from_page(soup):
     if match:
         return html.unescape(match.group(1)), False
 
-    # 2. YouTube
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
@@ -310,6 +309,27 @@ def fetch_video_info(entry, soup=None):
         return extract_video_url_from_page(soup)
     return None, False
 
+def download_youtube_video(youtube_url):
+    try:
+        ydl_opts = {
+            'format': 'best[ext=mp4]',
+            'outtmpl': '-',
+            'quiet': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            video_url = info.get('url')
+            if video_url:
+                r = requests.get(video_url, stream=True, timeout=30)
+                r.raise_for_status()
+                video_bytes = io.BytesIO(r.content)
+                video_bytes.seek(0)
+                return video_bytes
+    except Exception as e:
+        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
+    return None
+
 def download_image(url, referer=None):
     try:
         headers = {
@@ -325,26 +345,25 @@ def download_image(url, referer=None):
         return None
 
 # ---------- Обработка текста ----------
-def clean_think_tags(text):
-    end_idx = text.rfind('</think>')
-    if end_idx != -1:
-        return text[end_idx + len('</think>'):].strip()
-    start_idx = text.find('<think>')
-    if start_idx != -1:
-        return text[start_idx + len('<think>'):].strip()
-    return text.strip()
-
-def clean_generated_text(text):
-    text = clean_think_tags(text)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'^(?:Заголовок|Текст)\s*[:：]\s*', '', text, flags=re.IGNORECASE)
-    text = text.strip('"\'')
-    text = text.strip()
-    return text
+def simple_truncate_by_sentences(text, max_len):
+    if len(text) <= max_len:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    result = ""
+    for s in sentences:
+        if len(result) + len(s) + 1 > max_len:
+            break
+        result = (result + " " + s).strip()
+    if not result:
+        return text[:max_len]
+    return result
 
 def format_news_body(text):
     if not text:
         return ""
+    text = re.sub(r'\n(?!\n)', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r' {2,}', ' ', text).strip()
 
     unwanted_phrases = [
         r'Читать дальше\s*→?',
@@ -354,25 +373,27 @@ def format_news_body(text):
     for pattern in unwanted_phrases:
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
-    text = re.sub(r'\s+', ' ', text).strip()
-
     if '\n\n' in text:
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-        return "\n\n".join(paragraphs)
-
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    if len(sentences) <= 2:
-        return text
-
-    paragraphs = []
-    current = []
-    for sent in sentences:
-        current.append(sent)
-        if len(current) == 2:
-            paragraphs.append(" ".join(current))
+    else:
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if len(sentences) <= 1:
+            paragraphs = [text]
+        else:
+            paragraphs = []
             current = []
-    if current:
-        paragraphs.append(" ".join(current))
+            for sent in sentences:
+                current.append(sent)
+                if len(current) == 2:
+                    paragraphs.append(" ".join(current))
+                    current = []
+            if current:
+                paragraphs.append(" ".join(current))
+
+    def bold_quotes(s):
+        return re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", s)
+
+    paragraphs = [bold_quotes(p) for p in paragraphs]
 
     return "\n\n".join(paragraphs)
 
@@ -401,14 +422,13 @@ def extract_title_hashtag(title):
 
 def build_post_html(title, body, emoji='📄'):
     title_esc = escape_html(title)
-    body_esc = escape_html(body) if body else ""
+    body_formatted = format_news_body(body) if body else ""
 
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
-    if body_esc:
-        body_with_quotes = re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", body_esc)
+    if body_formatted:
         parts.append("┄┄┄ ✦ ┄┄┄")
-        parts.append(body_with_quotes)
+        parts.append(body_formatted)
 
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
@@ -431,81 +451,104 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq (JSON) ----------
-def rewrite_news(title, body, target_len=800):
-    print(f"Пытаюсь переписать через Groq: {title}")
+# ---------- GigaChat API ----------
+def get_gigachat_token():
+    """Получает токен доступа GigaChat."""
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": "Basic " + base64.b64encode(f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}".encode()).decode()
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
     try:
-        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными и краткими. Сократи текст до {target_len} символов, сохранив все ключевые факты и имена. Пиши на русском языке. Верни результат в виде JSON с полями "title" и "text".
+        r = requests.post(url, headers=headers, data=data, timeout=10)
+        r.raise_for_status()
+        return r.json().get("access_token")
+    except Exception as e:
+        print(f"Ошибка получения токена GigaChat: {e}")
+        return None
+
+def rewrite_news(title, body):
+    """
+    Переписывает заголовок и текст через GigaChat, делая их уникальными.
+    """
+    if not (GIGACHAT_CLIENT_ID and GIGACHAT_CLIENT_SECRET):
+        return title, body
+
+    token = get_gigachat_token()
+    if not token:
+        print("Не удалось получить токен GigaChat, используем оригинал")
+        return title, body
+
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
 
 Заголовок: {title}
 
 Текст: {body[:1500]}
+
+Выведи результат строго в формате:
+Заголовок: <новый заголовок>
+Текст: <новый текст>
 """
-        response = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": "Ты — опытный копирайтер. Возвращай только JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.5,
-            max_tokens=800
+    try:
+        response = requests.post(
+            "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "GigaChat",
+                "messages": [
+                    {"role": "system", "content": "Ты — редактор аниме-новостей."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.7,
+                "max_tokens": 800
+            },
+            timeout=30
         )
-        generated_text = response.choices[0].message.content.strip()
-        # Пытаемся извлечь JSON из ответа
-        json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group(0))
-            new_title = data.get('title', title)
-            new_body = data.get('text', body)
-            if new_title and new_body and (new_title != title or new_body != body):
-                return new_title, new_body
+        response.raise_for_status()
+        data = response.json()
+        generated_text = data["choices"][0]["message"]["content"].strip()
+
+        new_title = title
+        new_body = body
+        for line in generated_text.split('\n'):
+            line = line.strip()
+            if line.startswith('Заголовок:'):
+                new_title = line.replace('Заголовок:', '').strip()
+            elif line.startswith('Текст:'):
+                new_body = line.replace('Текст:', '').strip()
+
+        if new_title and new_body:
+            return new_title, new_body
         else:
-            print("JSON не найден, используем оригинал")
+            print("GigaChat не вернул корректный результат, используем оригинал")
             return title, body
     except Exception as e:
-        print(f"Ошибка при рерайте через Groq: {e}")
+        print(f"Ошибка при рерайте через GigaChat: {e}")
         return title, body
-
-def truncate_by_paragraphs(text, max_len):
-    if len(text) <= max_len:
-        return text
-    paragraphs = text.split('\n\n')
-    result = []
-    current_len = 0
-    for p in paragraphs:
-        if current_len + len(p) + 2 > max_len:
-            break
-        result.append(p)
-        current_len += len(p) + 2
-    if not result:
-        return text[:max_len]
-    return '\n\n'.join(result)
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
         emoji = '🎬'
-        target_len = 800
     elif video_url and not is_youtube:
         emoji = '🎞️'
-        target_len = 800
     elif image_url:
         emoji = '🖼️'
-        target_len = 800
     else:
         emoji = '📄'
-        target_len = 1500
 
-    if GROQ_API_KEY:
-        print("Вызываю rewrite_news...")
-        title, body = rewrite_news(title, body, target_len=target_len)
-        print("Рерайт завершён")
+    # Применяем рерайт через GigaChat
+    title, body = rewrite_news(title, body)
+
+    if video_url or image_url:
+        body = simple_truncate_by_sentences(body, 800) if body else ""
     else:
-        print("GROQ_API_KEY не задан, пропускаю рерайт")
-
-    body = format_news_body(body)
-
-    if target_len:
-        body = truncate_by_paragraphs(body, target_len)
+        body = simple_truncate_by_sentences(body, 3000) if body else ""
 
     message_text = build_post_html(title, body, emoji)
 
@@ -517,6 +560,14 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             print(f"Не удалось отправить видео: {e}")
 
     if video_url and is_youtube:
+        video_file = download_youtube_video(video_url)
+        if video_file:
+            try:
+                bot.send_video(CHANNEL_ID, video_file, caption=message_text[:1024], parse_mode='HTML')
+                return
+            except Exception as e:
+                print(f"Не удалось отправить скачанное видео: {e}")
+
         short_url = to_short_youtube_url(video_url)
         bot.send_message(
             CHANNEL_ID,
@@ -538,10 +589,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
-    print(f"GROQ_API_KEY задан: {bool(GROQ_API_KEY)}")
-    if not GROQ_API_KEY:
-        print("ВНИМАНИЕ: GROQ_API_KEY отсутствует, рерайт отключён")
-
     links, titles = load_posted()
     new_posts = 0
 
