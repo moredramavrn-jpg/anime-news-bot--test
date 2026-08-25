@@ -16,8 +16,10 @@ from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
 
+# Отключаем предупреждения о небезопасных сертификатах
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
@@ -31,6 +33,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# Кэш токена GigaChat
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
@@ -109,9 +112,9 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    main_content = soup.select_one('div.editor-body')
+    main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
-        main_content = soup.select_one('div.news_text')
+        main_content = soup.select_one('div.news_text')  # КГ-Портал
 
     if not main_content:
         selectors = [
@@ -491,7 +494,7 @@ def rewrite_news(title, body):
 
     body_part = body[:1200]
 
-    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Сократи текст до 800 символов, разбей на логические абзацы. Избегай дословного копирования. Пиши на русском языке.
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Сократи текст до 800 символов, разбей на логические абзацы. Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы внутри кавычек. Пиши на русском языке.
 
 Заголовок: {title}
 
@@ -512,7 +515,7 @@ def rewrite_news(title, body):
                 "User-Agent": "AnimeNewsBot/1.0"
             },
             json={
-                "model": "GigaChat-2-Pro",
+                "model": "GigaChat-3-Ultra",   # <-- Используем Ultra
                 "messages": [
                     {"role": "system", "content": "Ты — редактор аниме-новостей."},
                     {"role": "user", "content": prompt}
@@ -549,13 +552,10 @@ def rewrite_news(title, body):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
-    """Строит подпись, гарантированно влезающую в max_len, без обрыва на полуслове."""
-    # Полный вариант
     full = build_post_html(title, body, emoji)
     if len(full) <= max_len:
         return full
 
-    # Находим, сколько места занимают заголовок, разделитель и хэштеги
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
@@ -566,12 +566,10 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     separator = "┄┄┄ ✦ ┄┄┄"
     tail = f"{separator}\n{tags_str}"
 
-    available_for_body = max_len - len(title_part) - len(tail) - 5  # небольшой запас
+    available_for_body = max_len - len(title_part) - len(tail) - 5
     if available_for_body < 50:
-        # Если места слишком мало, просто обрезаем полный текст
         return full[:max_len]
 
-    # Обрезаем тело по предложениям
     truncated_body = simple_truncate_by_sentences(body, available_for_body)
     return f"{title_part}\n{separator}\n{truncated_body}\n\n{tags_str}"
 
@@ -585,16 +583,13 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Рерайт
     title, body = rewrite_news(title, body)
 
-    # Если есть медиа, делаем компактную подпись
     if video_url or image_url:
         full_message = build_caption_fit(title, body, emoji, 1024)
     else:
         full_message = build_post_html(title, body, emoji)
 
-    # Отправка
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
