@@ -336,7 +336,8 @@ def clean_think_tags(text):
 def clean_generated_text(text):
     text = clean_think_tags(text)
     text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'^(Заголовок|Текст)\s*[:：]\s*', '', text, flags=re.IGNORECASE)
+    # Убираем возможные артефакты в начале
+    text = re.sub(r'^(?:Заголовок|Текст)\s*[:：]\s*', '', text, flags=re.IGNORECASE)
     text = text.strip('"\'')
     text = text.strip()
     return text
@@ -430,7 +431,7 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq (с кратким пересказом) ----------
+# ---------- Рерайт через Groq ----------
 def rewrite_news(title, body, target_len=800):
     print(f"Пытаюсь переписать через Groq: {title} (целевая длина: {target_len})")
     try:
@@ -450,14 +451,15 @@ def rewrite_news(title, body, target_len=800):
                 {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла и делать их краткими."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
+            temperature=0.5,   # немного снизили для большей предсказуемости
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
         cleaned = clean_generated_text(generated_text)
 
-        title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
-        body_match = re.search(r'Текст\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
+        # Ищем заголовок и текст
+        title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?=\n\s*Текст\s*[:：]|$)', cleaned, re.DOTALL)
+        body_match = re.search(r'Текст\s*[:：]\s*(.*?)$', cleaned, re.DOTALL)
 
         new_title = title
         new_body = body
@@ -512,9 +514,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
+    # Очистка от возможных артефактов, которые могут остаться
+    body = re.sub(r'^(?:🎬|🎞️|🖼️|Текст\s*[:：])\s*', '', body)
     body = format_news_body(body)
 
-    # После рерайта ограничиваем длину (на случай, если модель вернула длиннее)
     if target_len:
         body = truncate_by_paragraphs(body, target_len)
 
