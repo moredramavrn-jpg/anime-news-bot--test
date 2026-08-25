@@ -492,9 +492,10 @@ def rewrite_news(title, body):
         print("GigaChat: не удалось получить токен")
         return title, body
 
-    body_part = body[:4000]   # передаём до 4000 символов
+    # Ограничиваем входной текст, чтобы рерайт был компактным
+    body_part = body[:1200]
 
-    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Постарайся сохранить объём исходного текста и разбей текст на логические абзацы. Избегай дословного копирования. Пиши на русском языке.
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Сократи текст до 800 символов, разбей на логические абзацы. Избегай дословного копирования. Пиши на русском языке.
 
 Заголовок: {title}
 
@@ -521,7 +522,7 @@ def rewrite_news(title, body):
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 2000   # увеличено
+                "max_tokens": 600   # ограничиваем длину ответа
             },
             timeout=30,
             verify=False
@@ -538,6 +539,9 @@ def rewrite_news(title, body):
                 new_title = line.replace('Заголовок:', '').strip()
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
+
+        # Гарантируем, что текст не превышает 800 символов
+        new_body = simple_truncate_by_sentences(new_body, 800)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -577,7 +581,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             print(f"Не удалось отправить видео: {e}")
 
     if video_url and is_youtube:
-        # Пробуем скачать видео (необязательно)
         video_file = download_youtube_video(video_url)
         if video_file:
             try:
@@ -586,7 +589,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить скачанное видео: {e}")
 
-        # Если не удалось скачать, отправляем сообщение с ссылкой
         bot.send_message(
             CHANNEL_ID,
             full_message + f"\n\nСмотреть: {to_short_youtube_url(video_url)}",
@@ -604,7 +606,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    # Обычное сообщение (без медиа или если медиа не отправилось)
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
