@@ -2,6 +2,7 @@ import os
 import re
 import html
 import io
+import json
 import feedparser
 import telebot
 import requests
@@ -20,23 +21,18 @@ RSS_URLS = [
     "https://www.goha.ru/rss/anime",
     "https://kg-portal.ru/rss/news_anime.rss"
 ]
+KANOBU_URL = "https://kanobu.ru/animes/"
 
 POSTED_FILE = "posted.txt"
 HF_MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# ---------- Работа с файлом опубликованных ----------
+# ---------- Работа с опубликованными ----------
 def normalize_title(title):
-    """Приводит заголовок к нижнему регистру и оставляет только буквы и цифры."""
     return re.sub(r'[^\w]', '', title.lower())
 
 def load_posted():
-    """
-    Загружает из файла опубликованные ссылки и нормализованные заголовки.
-    Формат: строки с префиксами LINK: и TITLE:.
-    Для обратной совместимости строки без префикса считаются ссылками.
-    """
     links = set()
     titles = set()
     if os.path.exists(POSTED_FILE):
@@ -47,7 +43,7 @@ def load_posted():
                     links.add(line[5:])
                 elif line.startswith('TITLE:'):
                     titles.add(line[6:])
-                elif line:  # старая строка без префикса
+                elif line:
                     links.add(line)
     return links, titles
 
@@ -59,21 +55,14 @@ def save_posted(links, titles):
             f.write(f"TITLE:{title}\n")
 
 def is_duplicate(link, title, links, titles):
-    """Проверяет, не является ли новость дубликатом."""
-    # 1. Точное совпадение ссылки
     if link and link in links:
         return True
-
     norm_title = normalize_title(title)
-    # 2. Точное совпадение нормализованного заголовка
     if norm_title in titles:
         return True
-
-    # 3. Похожие заголовки (нечёткое сравнение)
     for existing_title in titles:
         if SequenceMatcher(None, norm_title, existing_title).ratio() > 0.9:
             return True
-
     return False
 
 # ---------- HTML / парсинг ----------
@@ -114,17 +103,19 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    main_content = soup.select_one('div.editor-body')
+    main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
-        main_content = soup.select_one('div.news_text')
+        main_content = soup.select_one('div.news_text')  # КГ-Портал
 
     if not main_content:
+        # Канобу и другие
         selectors = [
             'article', 'div.news-content', 'div.content', 'div.news-text',
             'div.post-content', 'div.entry-content', 'div.article-content',
             'div.news-detail__text', 'div.b-news__text', 'div.js-news-text',
             'div.article__text', 'div.text-content', 'div.news-item__text',
-            'div.detail__text', 'div.news-full__text'
+            'div.detail__text', 'div.news-full__text', 'div.article-body',
+            'div.editor-body', 'div.news_text'
         ]
         for selector in selectors:
             main_content = soup.select_one(selector)
@@ -212,6 +203,8 @@ def extract_image_url_from_entry(entry):
         link = entry.get('link', '')
         if 'kg-portal.ru' in link:
             base_domain = 'https://kg-portal.ru'
+        elif 'kanobu.ru' in link:
+            base_domain = 'https://kanobu.ru'
 
     if 'media_content' in entry:
         for media in entry.media_content:
@@ -561,10 +554,33 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
 
+# ---------- Получение записей ----------
+def fetch_kanobu_entries():
+    """Загружает главную Канобу и извлекает ссылки и заголовки из JSON-LD."""
+    soup = get_page_soup(KANOBU_URL)
+    if not soup:
+        return []
+    entries = []
+    for script in soup.find_all('script', type='application/ld+json'):
+        try:
+            data = json.loads(script.string)
+            if data.get('@type') == 'ItemList':
+                for item in data.get('itemListElement', []):
+                    name = item.get('name', '')
+                    link = item.get('url', '')
+                    if name and link:
+                        entries.append({'title': name, 'link': link})
+                break
+        except:
+            continue
+    return entries[:10]
+
+# ---------- Главный цикл ----------
 def main():
     links, titles = load_posted()
     new_posts = 0
 
+    # 1. Обработка RSS-источников
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
@@ -580,8 +596,6 @@ def main():
 
             link = entry.get('link', '')
             title = entry.get('title', 'Без названия')
-
-            # Проверка на дубликат
             if is_duplicate(link, title, links, titles):
                 print(f"Дубликат пропущен: {title}")
                 continue
@@ -593,7 +607,6 @@ def main():
 
             try:
                 send_post(title, full_text, link, image_url, video_url, is_youtube)
-                # Добавляем в списки после успешной отправки
                 links.add(link)
                 titles.add(normalize_title(title))
                 new_posts += 1
@@ -601,6 +614,30 @@ def main():
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
 
+    # 2. Обработка Канобу
+    kanobu_entries = fetch_kanobu_entries()
+    for item in kanobu_entries:
+        title = item.get('title', 'Без названия')
+        link = item.get('link', '')
+        if is_duplicate(link, title, links, titles):
+            print(f"Дубликат пропущен: {title}")
+            continue
+
+        soup = get_page_soup(link) if link else None
+        full_text = extract_full_text_from_page(soup) if soup else ""
+        image_url = fetch_image_url({'link': link}, soup)
+        video_url, is_youtube = fetch_video_info({'link': link}, soup)
+
+        try:
+            send_post(title, full_text, link, image_url, video_url, is_youtube)
+            links.add(link)
+            titles.add(normalize_title(title))
+            new_posts += 1
+            print(f"Опубликовано: {title}")
+        except Exception as e:
+            print(f"Ошибка отправки для {link}: {e}")
+
+    # Сохраняем обновления
     if new_posts > 0:
         save_posted(links, titles)
         print(f"Сохранено {new_posts} новых записей в {POSTED_FILE}")
