@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
+from groq import Groq
 
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -24,25 +25,8 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-# Словарь синонимов для fallback
-SYNONYMS = {
-    'анонсировал': 'объявил',
-    'анонсировали': 'объявили',
-    'вышел': 'появился',
-    'вышла': 'появилась',
-    'новый': 'свежий',
-    'трейлер': 'ролик',
-    'получил': 'заполучил',
-    'создатели': 'авторы',
-    'показали': 'представили',
-    'студия': 'компания',
-}
-
-def simple_synonymize(text):
-    for phrase in sorted(SYNONYMS.keys(), key=len, reverse=True):
-        text = re.sub(re.escape(phrase), SYNONYMS[phrase], text, flags=re.IGNORECASE)
-    return text
+groq_client = Groq(api_key=GROQ_API_KEY)
+GROQ_MODEL = "qwen/qwen3.6-27b"   # или "llama-3.3-70b-versatile"
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -268,7 +252,6 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # 1. Прямые видеофайлы (mp4/webm)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -291,7 +274,6 @@ def extract_video_url_from_page(soup):
     if match:
         return html.unescape(match.group(1)), False
 
-    # 2. YouTube
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
@@ -325,6 +307,27 @@ def fetch_video_info(entry, soup=None):
     if soup:
         return extract_video_url_from_page(soup)
     return None, False
+
+def download_youtube_video(youtube_url):
+    try:
+        ydl_opts = {
+            'format': 'best[ext=mp4]',
+            'outtmpl': '-',
+            'quiet': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            video_url = info.get('url')
+            if video_url:
+                r = requests.get(video_url, stream=True, timeout=30)
+                r.raise_for_status()
+                video_bytes = io.BytesIO(r.content)
+                video_bytes.seek(0)
+                return video_bytes
+    except Exception as e:
+        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
+    return None
 
 def download_image(url, referer=None):
     try:
@@ -447,46 +450,36 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq compound ----------
+# ---------- Рерайт через Groq ----------
 def rewrite_news(title, body):
-    if not GROQ_API_KEY:
-        print("GROQ_API_KEY не задан, применяю синонимизацию")
-        return simple_synonymize(title), simple_synonymize(body)
-
-    print("Попытка рерайта через Groq (groq/compound)")
+    """
+    Переписывает заголовок и текст через Groq, делая их уникальными.
+    """
     try:
-        import groq
-        client = groq.Groq(api_key=GROQ_API_KEY)
-        prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
+        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
 
-Исходный заголовок: {title}
+Заголовок: {title}
 
-Исходный текст: {body[:1500]}
+Текст: {body[:1500]}
 
 Выведи результат строго в формате:
 Заголовок: <новый заголовок>
 Текст: <новый текст>
 """
-        completion = client.chat.completions.create(
-            model="groq/compound",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=1,
-            max_completion_tokens=2048,
-            top_p=1,
-            stream=False,
-            extra_body={
-                "compound_custom": {
-                    "tools": {
-                        "enabled_tools": ["web_search", "code_interpreter", "visit_website"]
-                    }
-                }
-            }
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=800
         )
-        generated_text = completion.choices[0].message.content.strip()
-        print(f"Ответ Groq compound: {generated_text}")
+        generated_text = response.choices[0].message.content.strip()
 
         new_title = title
         new_body = body
+
         for line in generated_text.split('\n'):
             line = line.strip()
             if line.startswith('Заголовок:'):
@@ -494,10 +487,14 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        return new_title, new_body
+        if new_title and new_body:
+            return new_title, new_body
+        else:
+            print("Groq не вернул корректный результат, используем оригинал")
+            return title, body
     except Exception as e:
-        print(f"Ошибка рерайта через Groq compound: {e}")
-        return simple_synonymize(title), simple_synonymize(body)
+        print(f"Ошибка при рерайте через Groq: {e}")
+        return title, body
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
@@ -509,8 +506,9 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт или синонимизацию
-    title, body = rewrite_news(title, body)
+    # Применяем рерайт через Groq
+    if GROQ_API_KEY:
+        title, body = rewrite_news(title, body)
 
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
@@ -527,6 +525,14 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             print(f"Не удалось отправить видео: {e}")
 
     if video_url and is_youtube:
+        video_file = download_youtube_video(video_url)
+        if video_file:
+            try:
+                bot.send_video(CHANNEL_ID, video_file, caption=message_text[:1024], parse_mode='HTML')
+                return
+            except Exception as e:
+                print(f"Не удалось отправить скачанное видео: {e}")
+
         short_url = to_short_youtube_url(video_url)
         bot.send_message(
             CHANNEL_ID,
