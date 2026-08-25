@@ -14,6 +14,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+HF_API_KEY = os.getenv("HF_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -21,6 +22,7 @@ RSS_URLS = [
 ]
 
 POSTED_FILE = "posted.txt"
+HF_PARAPHRASE_URL = "https://api-inference.huggingface.co/models/cointegrated/rut5-base-paraphraser"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -355,6 +357,53 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
+def paraphrase_text(text):
+    """Отправляет текст в Hugging Face для перефразирования."""
+    try:
+        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+        payload = {
+            "inputs": text,
+            "parameters": {
+                "max_length": 200,
+                "num_beams": 5,
+                "early_stopping": True
+            }
+        }
+        response = requests.post(HF_PARAPHRASE_URL, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        result = response.json()
+        if isinstance(result, list) and len(result) > 0:
+            return result[0].get('generated_text', text)
+        elif isinstance(result, dict):
+            return result.get('generated_text', text)
+        return text
+    except Exception as e:
+        print(f"Ошибка парафраза: {e}")
+        return text
+
+def rewrite_news(title, body):
+    """
+    Перефразирует заголовок и часть текста.
+    Если результат слишком похож, возвращает оригинал.
+    """
+    # Перефразируем заголовок
+    new_title = paraphrase_text(title)
+
+    # Перефразируем первые 1500 символов текста (чтобы не нагружать модель)
+    body_to_process = body[:1500] if len(body) > 1500 else body
+    new_body = paraphrase_text(body_to_process)
+
+    # Проверяем, что текст изменился существенно
+    if (SequenceMatcher(None, title, new_title).ratio() < 0.9 and
+        SequenceMatcher(None, body_to_process, new_body).ratio() < 0.9):
+        # Если текст был обрезан, возвращаем парафраз + остаток оригинала
+        if len(body) > 1500:
+            new_body = new_body + "\n\n" + body[1500:]
+        return new_title, new_body
+    else:
+        print("Парафраз не дал значимых изменений, оставляем оригинал")
+        return title, body
+
 def format_news_body(text):
     if not text:
         return ""
@@ -458,6 +507,11 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
+    # Применяем рерайт через Hugging Face
+    if HF_API_KEY:
+        title, body = rewrite_news(title, body)
+
+    # Сокращаем текст до допустимых лимитов
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
     else:
