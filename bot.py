@@ -373,6 +373,7 @@ def strip_html_tags(text):
     return re.sub(r'<[^>]+>', '', text)
 
 def fix_quotes(text):
+    # Замена прямых кавычек на ёлочки
     result = []
     open_quote = False
     for ch in text:
@@ -385,7 +386,32 @@ def fix_quotes(text):
                 open_quote = False
         else:
             result.append(ch)
-    return ''.join(result)
+    # Заменяем „...“ на «...»
+    text = ''.join(result)
+    text = text.replace('„', '«').replace('“', '»')
+    return text
+
+def fix_punctuation_spaces(text):
+    # Убираем пробел перед знаками препинания
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+    # Убираем пробел после открывающей кавычки
+    text = re.sub(r'(«)\s+', r'\1', text)
+    # Убираем пробел перед закрывающей кавычкой
+    text = re.sub(r'\s+(»)', r'\1', text)
+    return text
+
+def remove_garbage_lines(text):
+    """Удаляет строки, которые выглядят как рассуждения или вопросы."""
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        # Если строка содержит риторический вопрос или начинается с сомнительных слов – пропускаем
+        if re.search(r'\?\s*$', line):
+            continue
+        if re.match(r'^(Что за|Впрочем|Но и|Как думаете|Кстати|Наверное|Возможно)', line, re.IGNORECASE):
+            continue
+        cleaned.append(line)
+    return '\n'.join(cleaned)
 
 def clean_and_paragraph(text):
     if not text:
@@ -416,6 +442,8 @@ def clean_and_paragraph(text):
 def format_news_body(text):
     text = clean_and_paragraph(text)
     text = fix_quotes(text)
+    text = fix_punctuation_spaces(text)
+    text = remove_garbage_lines(text)
     return text
 
 def escape_html(text):
@@ -518,6 +546,7 @@ def rewrite_news(title, body):
 Постарайся сохранить объём примерно 1500 символов. Не упускай важные детали.
 Разбей текст на логические абзацы, каждый абзац должен содержать ровно 2 предложения.
 Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы.
+Не задавай вопросов, не пиши комментарии от себя, не используй вводные слова-рассуждения.
 Пиши на русском языке.
 
 Заголовок: {title}
@@ -563,8 +592,13 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
+        # Финальная очистка
         new_title = fix_quotes(new_title)
-        # Не делаем clean_and_paragraph здесь, чтобы не дублировать
+        new_title = fix_punctuation_spaces(new_title)
+        new_body = clean_and_paragraph(new_body)
+        new_body = fix_quotes(new_body)
+        new_body = fix_punctuation_spaces(new_body)
+        new_body = remove_garbage_lines(new_body)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -577,33 +611,28 @@ def rewrite_news(title, body):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
-    # Полный вариант с учётом HTML
     full_html = build_post_html(title, body, emoji)
     plain_text = strip_html_tags(full_html)
 
     if len(plain_text) <= max_len:
         return full_html
 
-    # Если превышаем, обрезаем тело (входной body) до нужного размера
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
     tags_str = " ".join(hashtags)
 
-    # Определяем, сколько чистых символов занимают заголовок и хэштеги
     title_plain = f"{emoji} {title}"
     separator_plain = "┄┄┄ ✦ ┄┄┄"
     footer_plain = f"🏷️ {tags_str}"
 
-    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6  # 6 на переносы строк
+    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6
     available = max_len - base_len
 
     if available < 50:
-        # Если места очень мало, просто обрезаем по словам весь текст
         return truncate_by_words(plain_text, max_len)
 
-    # Форматируем тело и обрезаем по абзацам
     body_formatted = format_news_body(body)
     body_paragraphs = body_formatted.split('\n\n')
     chosen = []
@@ -614,7 +643,6 @@ def build_caption_fit(title, body, emoji, max_len=1024):
             chosen.append(para)
             current_len += len(para_plain) + 2
         else:
-            # Пытаемся влезть часть последнего абзаца
             remaining = available - current_len
             if remaining > 20:
                 truncated_para = truncate_by_words(para_plain, remaining)
