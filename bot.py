@@ -6,6 +6,7 @@ import feedparser
 import telebot
 import requests
 import yt_dlp
+from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
@@ -25,17 +26,57 @@ HF_MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+# ---------- Работа с файлом опубликованных ----------
+def normalize_title(title):
+    """Приводит заголовок к нижнему регистру и оставляет только буквы и цифры."""
+    return re.sub(r'[^\w]', '', title.lower())
+
 def load_posted():
-    if not os.path.exists(POSTED_FILE):
-        return set()
-    with open(POSTED_FILE, 'r', encoding='utf-8') as f:
-        return set(line.strip() for line in f if line.strip())
+    """
+    Загружает из файла опубликованные ссылки и нормализованные заголовки.
+    Формат: строки с префиксами LINK: и TITLE:.
+    Для обратной совместимости строки без префикса считаются ссылками.
+    """
+    links = set()
+    titles = set()
+    if os.path.exists(POSTED_FILE):
+        with open(POSTED_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('LINK:'):
+                    links.add(line[5:])
+                elif line.startswith('TITLE:'):
+                    titles.add(line[6:])
+                elif line:  # старая строка без префикса
+                    links.add(line)
+    return links, titles
 
-def save_posted(posted_links):
+def save_posted(links, titles):
     with open(POSTED_FILE, 'w', encoding='utf-8') as f:
-        for link in posted_links:
-            f.write(link + '\n')
+        for link in links:
+            f.write(f"LINK:{link}\n")
+        for title in titles:
+            f.write(f"TITLE:{title}\n")
 
+def is_duplicate(link, title, links, titles):
+    """Проверяет, не является ли новость дубликатом."""
+    # 1. Точное совпадение ссылки
+    if link and link in links:
+        return True
+
+    norm_title = normalize_title(title)
+    # 2. Точное совпадение нормализованного заголовка
+    if norm_title in titles:
+        return True
+
+    # 3. Похожие заголовки (нечёткое сравнение)
+    for existing_title in titles:
+        if SequenceMatcher(None, norm_title, existing_title).ratio() > 0.9:
+            return True
+
+    return False
+
+# ---------- HTML / парсинг ----------
 def clean_html(raw_html):
     if not raw_html:
         return ""
@@ -73,9 +114,9 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    main_content = soup.select_one('div.editor-body')  # Goha.ru
+    main_content = soup.select_one('div.editor-body')
     if not main_content:
-        main_content = soup.select_one('div.news_text')  # КГ-Портал
+        main_content = soup.select_one('div.news_text')
 
     if not main_content:
         selectors = [
@@ -107,22 +148,17 @@ def fetch_full_text(entry):
         return clean_html(summary)
     return ""
 
+# ---------- Изображения ----------
 def extract_image_from_page(soup, page_url=None):
     if not soup:
         return None
 
     selectors = [
-        'div.editor-body-image img',      # Goha.ru
-        'div.editor-body img',
-        'div.news_cover_center img',      # КГ-Портал
-        'div.news_text img',
-        'div.news_box img',
-        'article img',
-        'div.news_image img',
-        'div.article_image img',
-        'div.full_news img',
-        'div.news_content img',
-        'div.news-full__text img',
+        'div.editor-body-image img', 'div.editor-body img',
+        'div.news_cover_center img', 'div.news_text img',
+        'div.news_box img', 'article img', 'div.news_image img',
+        'div.article_image img', 'div.full_news img',
+        'div.news_content img', 'div.news-full__text img',
     ]
 
     for selector in selectors:
@@ -204,17 +240,12 @@ def extract_image_url_from_entry(entry):
                 return make_absolute(match.group(1), base_domain)
     return None
 
+# ---------- Видео ----------
 def is_youtube_video(url):
     return ('youtube.com/watch' in url) or ('youtu.be/' in url)
 
 def to_short_youtube_url(url):
-    """
-    Преобразует любую YouTube-ссылку в короткую youtu.be/ID,
-    включая ссылки с закодированными символами (%3F, %3D).
-    """
-    # Декодируем URL, чтобы убрать %3F, %3D и т.п.
     decoded_url = unquote(url)
-    # Извлекаем ID видео
     video_id = None
     if 'youtube.com/watch' in decoded_url:
         match = re.search(r'v=([^&]+)', decoded_url)
@@ -226,13 +257,13 @@ def to_short_youtube_url(url):
             video_id = match.group(1)
     if video_id:
         return f"https://youtu.be/{video_id}"
-    return decoded_url  # если не получилось, возвращаем декодированную ссылку
+    return decoded_url
 
 def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # 1. Прямые видеофайлы (mp4/webm) – приоритет
+    # 1. Прямые видеофайлы (mp4/webm)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -255,7 +286,7 @@ def extract_video_url_from_page(soup):
     if match:
         return html.unescape(match.group(1)), False
 
-    # 2. YouTube видео
+    # 2. YouTube
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
@@ -291,7 +322,6 @@ def fetch_video_info(entry, soup=None):
     return None, False
 
 def download_youtube_video(youtube_url):
-    """Скачивает YouTube-видео и возвращает BytesIO."""
     try:
         ydl_opts = {
             'format': 'best[ext=mp4]',
@@ -326,6 +356,7 @@ def download_image(url, referer=None):
         print(f"Не удалось скачать изображение {url}: {e}")
         return None
 
+# ---------- Обработка текста ----------
 def simple_truncate_by_sentences(text, max_len):
     if len(text) <= max_len:
         return text
@@ -467,7 +498,6 @@ def build_post_html(title, body, emoji='📄'):
     return "\n".join(parts)
 
 def is_podcast_entry(entry):
-    """Пропускаем выпуски подкастов (например, ЕВА-699)."""
     title = entry.get('title', '')
     link = entry.get('link', '')
     if re.match(r'^ЕВА-\d+', title, re.IGNORECASE):
@@ -495,7 +525,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     message_text = build_post_html(title, body, emoji)
 
-    # Прямое видео (mp4/webm)
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=message_text[:1024], parse_mode='HTML')
@@ -503,7 +532,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
 
-    # YouTube: пробуем скачать и отправить как видео
     if video_url and is_youtube:
         video_file = download_youtube_video(video_url)
         if video_file:
@@ -513,7 +541,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить скачанное видео: {e}")
 
-        # Если не удалось скачать, отправляем короткую ссылку с превью
         short_url = to_short_youtube_url(video_url)
         bot.send_message(
             CHANNEL_ID,
@@ -523,7 +550,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         )
         return
 
-    # Картинка
     if image_url:
         image_file = download_image(image_url, referer=link)
         if image_file:
@@ -533,11 +559,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    # Обычное сообщение
     bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
-    posted_links = load_posted()
+    links, titles = load_posted()
     new_posts = 0
 
     for rss_url in RSS_URLS:
@@ -554,10 +579,12 @@ def main():
                 continue
 
             link = entry.get('link', '')
-            if not link or link in posted_links:
-                continue
-
             title = entry.get('title', 'Без названия')
+
+            # Проверка на дубликат
+            if is_duplicate(link, title, links, titles):
+                print(f"Дубликат пропущен: {title}")
+                continue
 
             soup = get_page_soup(link) if link else None
             full_text = extract_full_text_from_page(soup) if soup else fetch_full_text(entry)
@@ -566,15 +593,17 @@ def main():
 
             try:
                 send_post(title, full_text, link, image_url, video_url, is_youtube)
-                posted_links.add(link)
+                # Добавляем в списки после успешной отправки
+                links.add(link)
+                titles.add(normalize_title(title))
                 new_posts += 1
                 print(f"Опубликовано: {title}")
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
 
     if new_posts > 0:
-        save_posted(posted_links)
-        print(f"Сохранено {new_posts} новых ссылок в {POSTED_FILE}")
+        save_posted(links, titles)
+        print(f"Сохранено {new_posts} новых записей в {POSTED_FILE}")
     else:
         print("Новых новостей нет.")
 
