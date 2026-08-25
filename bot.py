@@ -373,7 +373,6 @@ def strip_html_tags(text):
     return re.sub(r'<[^>]+>', '', text)
 
 def fix_quotes(text):
-    # Замена прямых кавычек на ёлочки
     result = []
     open_quote = False
     for ch in text:
@@ -386,26 +385,20 @@ def fix_quotes(text):
                 open_quote = False
         else:
             result.append(ch)
-    # Заменяем „...“ на «...»
     text = ''.join(result)
     text = text.replace('„', '«').replace('“', '»')
     return text
 
 def fix_punctuation_spaces(text):
-    # Убираем пробел перед знаками препинания
     text = re.sub(r'\s+([.,!?;:])', r'\1', text)
-    # Убираем пробел после открывающей кавычки
     text = re.sub(r'(«)\s+', r'\1', text)
-    # Убираем пробел перед закрывающей кавычкой
     text = re.sub(r'\s+(»)', r'\1', text)
     return text
 
 def remove_garbage_lines(text):
-    """Удаляет строки, которые выглядят как рассуждения или вопросы."""
     lines = text.split('\n')
     cleaned = []
     for line in lines:
-        # Если строка содержит риторический вопрос или начинается с сомнительных слов – пропускаем
         if re.search(r'\?\s*$', line):
             continue
         if re.match(r'^(Что за|Впрочем|Но и|Как думаете|Кстати|Наверное|Возможно)', line, re.IGNORECASE):
@@ -446,6 +439,23 @@ def format_news_body(text):
     text = remove_garbage_lines(text)
     return text
 
+def embed_video_link(text, video_url):
+    """Заменяет первое вхождение слов 'трейлер' или 'видео' на гиперссылку."""
+    if not video_url:
+        return text
+    # Ищем слово 'трейлер' или 'видео' (регистронезависимо)
+    pattern = re.compile(r'(трейлер|видео)', re.IGNORECASE)
+    match = pattern.search(text)
+    if match:
+        word = match.group(0)
+        start, end = match.span()
+        # Оборачиваем найденное слово в ссылку
+        linked_word = f'<a href="{video_url}">{word}</a>'
+        return text[:start] + linked_word + text[end:]
+    else:
+        # Если не найдено, добавляем ссылку на слово "трейлер" в конце? Нет, просто возвращаем текст
+        return text
+
 def escape_html(text):
     return html.escape(text, quote=False)
 
@@ -469,9 +479,13 @@ def extract_title_hashtag(title):
         return make_hashtag(anime_name)
     return None
 
-def build_post_html(title, body, emoji='📄'):
+def build_post_html(title, body, emoji='📄', video_url=None):
     title_esc = escape_html(title)
     body_formatted = format_news_body(body) if body else ""
+
+    # Если есть видео, встраиваем ссылку в текст
+    if video_url and body_formatted:
+        body_formatted = embed_video_link(body_formatted, video_url)
 
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
@@ -592,13 +606,8 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Финальная очистка
         new_title = fix_quotes(new_title)
         new_title = fix_punctuation_spaces(new_title)
-        new_body = clean_and_paragraph(new_body)
-        new_body = fix_quotes(new_body)
-        new_body = fix_punctuation_spaces(new_body)
-        new_body = remove_garbage_lines(new_body)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -610,13 +619,14 @@ def rewrite_news(title, body):
         print(f"Ошибка при рерайте через GigaChat: {e}")
         return title, body
 
-def build_caption_fit(title, body, emoji, max_len=1024):
-    full_html = build_post_html(title, body, emoji)
+def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
+    full_html = build_post_html(title, body, emoji, video_url)
     plain_text = strip_html_tags(full_html)
 
     if len(plain_text) <= max_len:
         return full_html
 
+    # Если не влезает, обрезаем тело
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
@@ -633,7 +643,10 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     if available < 50:
         return truncate_by_words(plain_text, max_len)
 
+    # Форматируем тело с учётом возможной ссылки
     body_formatted = format_news_body(body)
+    if video_url:
+        body_formatted = embed_video_link(body_formatted, video_url)
     body_paragraphs = body_formatted.split('\n\n')
     chosen = []
     current_len = 0
@@ -662,37 +675,23 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
+    # Если YouTube, приводим ссылку к короткому виду
+    final_video_url = to_short_youtube_url(video_url) if (video_url and is_youtube) else video_url
+
     title, body = rewrite_news(title, body)
 
-    if video_url or image_url:
-        full_message = build_caption_fit(title, body, emoji, 1024)
+    if image_url:
+        full_message = build_caption_fit(title, body, emoji, 1024, final_video_url)
     else:
-        full_message = build_post_html(title, body, emoji)
+        full_message = build_post_html(title, body, emoji, final_video_url)
 
+    # Отправка
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
             return
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
-
-    if video_url and is_youtube:
-        video_file = download_youtube_video(video_url)
-        if video_file:
-            try:
-                bot.send_video(CHANNEL_ID, video_file, caption=full_message[:1024], parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить скачанное видео: {e}")
-
-        short_url = to_short_youtube_url(video_url)
-        bot.send_message(
-            CHANNEL_ID,
-            full_message + f"\n\nСмотреть: {short_url}",
-            parse_mode='HTML',
-            disable_web_page_preview=False
-        )
-        return
 
     if image_url:
         image_file = download_image(image_url, referer=link)
@@ -702,6 +701,11 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
                 return
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
+
+    # Если видео YouTube и нет картинки – обычное сообщение
+    if final_video_url and is_youtube and not image_url:
+        bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
+        return
 
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
