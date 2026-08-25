@@ -25,7 +25,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "qwen/qwen3.6-27b"   # можно заменить на "llama-3.3-70b-versatile"
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -71,9 +71,10 @@ def clean_html(raw_html):
     soup = BeautifulSoup(raw_html, "lxml")
     for script in soup(["script", "style"]):
         script.decompose()
-    text = soup.get_text(separator="\n")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines)
+    text = soup.get_text(separator=" ")   # используем пробел, чтобы не было лишних переносов
+    # схлопываем множественные пробелы
+    text = re.sub(r' {2,}', ' ', text).strip()
+    return text
 
 def make_absolute(url, base_domain):
     if url.startswith('//'):
@@ -338,7 +339,7 @@ def simple_truncate_by_sentences(text, max_len):
     return result
 
 def clean_think_tags(text):
-    """Удаляет блоки <think>...</think> и всё до последнего </think>."""
+    """Удаляет всё, что находится до последнего </think>."""
     end_idx = text.rfind('</think>')
     if end_idx != -1:
         return text[end_idx + len('</think>'):].strip()
@@ -350,11 +351,39 @@ def clean_think_tags(text):
 def format_news_body(text):
     if not text:
         return ""
-    # Простая очистка, без HTML-тегов
-    text = re.sub(r'\n(?!\n)', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r' {2,}', ' ', text).strip()
-    return text
+
+    # Удаляем нежелательные фразы
+    unwanted_phrases = [
+        r'Читать дальше\s*→?',
+        r'Читать полностью\s*:?',
+        r'Источник\s*:',
+    ]
+    for pattern in unwanted_phrases:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+    # Нормализуем пробелы
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Если текст содержит двойные переносы, используем их как абзацы
+    if '\n\n' in text:
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    else:
+        # Разбиваем на предложения
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        if len(sentences) <= 1:
+            return text
+        # Группируем по 2 предложения
+        paragraphs = []
+        current = []
+        for sent in sentences:
+            current.append(sent)
+            if len(current) == 2:
+                paragraphs.append(" ".join(current))
+                current = []
+        if current:
+            paragraphs.append(" ".join(current))
+
+    return "\n\n".join(paragraphs)
 
 def escape_html(text):
     return html.escape(text, quote=False)
@@ -386,8 +415,10 @@ def build_post_html(title, body, emoji='📄'):
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
     if body_esc:
+        # Выделяем названия в кавычках «...» жирным после экранирования
+        body_with_quotes = re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", body_esc)
         parts.append("┄┄┄ ✦ ┄┄┄")
-        parts.append(body_esc)
+        parts.append(body_with_quotes)
 
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
@@ -412,8 +443,9 @@ def is_podcast_entry(entry):
 
 # ---------- Рерайт через Groq ----------
 def rewrite_news(title, body):
+    print(f"Пытаюсь переписать через Groq: {title}")
     try:
-        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
+        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке, используй только русские буквы. Сохрани структуру абзацев, разделяя их двойным переносом строки.
 
 Заголовок: {title}
 
@@ -445,7 +477,7 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Убираем возможные HTML-теги
+        # Убираем возможные HTML-теги из результата Groq
         new_title = re.sub(r'<[^>]+>', '', new_title)
         new_body = re.sub(r'<[^>]+>', '', new_body)
 
@@ -475,6 +507,9 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         print("Рерайт завершён")
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
+
+    # После рерайта применяем форматирование абзацев
+    body = format_news_body(body)
 
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
