@@ -5,6 +5,7 @@ import io
 import json
 import base64
 import uuid
+import time
 import feedparser
 import telebot
 import requests
@@ -17,8 +18,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GIGACHAT_CLIENT_ID = os.getenv("GIGACHAT_CLIENT_ID")
-GIGACHAT_CLIENT_SECRET = os.getenv("GIGACHAT_CLIENT_SECRET")
+GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -28,6 +28,10 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+# Глобальные переменные для кэширования токена GigaChat
+gigachat_access_token = None
+gigachat_token_expires_at = 0
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -453,25 +457,46 @@ def is_podcast_entry(entry):
 
 # ---------- GigaChat API ----------
 def get_gigachat_token():
+    """Возвращает действующий токен доступа GigaChat, используя кэш."""
+    global gigachat_access_token, gigachat_token_expires_at
+
+    # Проверяем, есть ли действующий токен (с запасом 30 секунд)
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
         "RqUID": str(uuid.uuid4()),
-        "Authorization": "Basic " + base64.b64encode(f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}".encode()).decode()
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
     }
     data = {"scope": "GIGACHAT_API_PERS"}
     try:
         r = requests.post(url, headers=headers, data=data, timeout=10)
         r.raise_for_status()
-        return r.json().get("access_token")
+        token_data = r.json()
+        gigachat_access_token = token_data.get("access_token")
+        # Время истечения указано в миллисекундах (или секундах?) — в документации пример в миллисекундах.
+        # Для надёжности получаем expires_at как есть, но если оно в миллисекундах, переводим в секунды.
+        expires_at = token_data.get("expires_at")
+        if expires_at:
+            # Проверяем, похоже ли на миллисекунды ( > 10^12 )
+            if expires_at > 10**12:
+                gigachat_token_expires_at = expires_at / 1000
+            else:
+                gigachat_token_expires_at = expires_at
+        else:
+            # Если нет поля, устанавливаем 30 минут
+            gigachat_token_expires_at = time.time() + 1800
+        return gigachat_access_token
     except Exception as e:
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
 def rewrite_news(title, body):
-    if not (GIGACHAT_CLIENT_ID and GIGACHAT_CLIENT_SECRET):
-        print("GigaChat: нет ключей, рерайт не выполняется")
+    if not GIGACHAT_AUTHORIZATION_KEY:
+        print("GigaChat: нет ключа авторизации, рерайт не выполняется")
         return title, body
 
     token = get_gigachat_token()
@@ -491,10 +516,13 @@ def rewrite_news(title, body):
 """
     try:
         response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",   # <-- обновлённый endpoint
+            "https://api.giga.chat/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "X-Request-ID": str(uuid.uuid4()),
+                "X-Session-ID": str(uuid.uuid4()),
+                "User-Agent": "AnimeNewsBot/1.0"
             },
             json={
                 "model": "GigaChat",
