@@ -6,6 +6,7 @@ import json
 import base64
 import uuid
 import time
+import urllib3
 import feedparser
 import telebot
 import requests
@@ -14,6 +15,9 @@ from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
+
+# Отключаем предупреждения о небезопасных сертификатах
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -272,13 +276,6 @@ def extract_video_url_from_page(soup):
         if re.search(r'\.(mp4|webm)(\?.*)?$', url, re.IGNORECASE):
             return url, False
 
-    scripts = soup.find_all('script')
-    script_text = ' '.join(s.get_text() for s in scripts)
-    pattern = r'(?:sources|vodQualities)[^{]*?["\']src["\']\s*:\s*["\']([^"\']+\.(?:mp4|webm))'
-    match = re.search(pattern, script_text, re.IGNORECASE)
-    if match:
-        return html.unescape(match.group(1)), False
-
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
@@ -471,7 +468,8 @@ def get_gigachat_token():
     }
     data = {"scope": "GIGACHAT_API_PERS"}
     try:
-        r = requests.post(url, headers=headers, data=data, timeout=10)
+        # Важно: verify=False для обхода проблем с сертификатом
+        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
         r.raise_for_status()
         token_data = r.json()
         gigachat_access_token = token_data.get("access_token")
@@ -516,7 +514,7 @@ def rewrite_news(title, body):
                 "User-Agent": "AnimeNewsBot/1.0"
             },
             json={
-                "model": "GigaChat-2-Pro",   # <-- правильная модель для рерайта
+                "model": "GigaChat-2-Pro",   # модель для рерайта
                 "messages": [
                     {"role": "system", "content": "Ты — редактор аниме-новостей."},
                     {"role": "user", "content": prompt}
@@ -524,7 +522,8 @@ def rewrite_news(title, body):
                 "temperature": 0.7,
                 "max_tokens": 800
             },
-            timeout=30
+            timeout=30,
+            verify=False   # на всякий случай, если сертификат тоже самоподписанный
         )
         response.raise_for_status()
         data = response.json()
@@ -576,6 +575,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             print(f"Не удалось отправить видео: {e}")
 
     if video_url and is_youtube:
+        # Пробуем скачать, но если не получится, отправляем ссылку
         video_file = download_youtube_video(video_url)
         if video_file:
             try:
