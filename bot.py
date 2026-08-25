@@ -14,7 +14,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -24,6 +24,25 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+# Словарь синонимов для fallback
+SYNONYMS = {
+    'анонсировал': 'объявил',
+    'анонсировали': 'объявили',
+    'вышел': 'появился',
+    'вышла': 'появилась',
+    'новый': 'свежий',
+    'трейлер': 'ролик',
+    'получил': 'заполучил',
+    'создатели': 'авторы',
+    'показали': 'представили',
+    'студия': 'компания',
+}
+
+def simple_synonymize(text):
+    for phrase in sorted(SYNONYMS.keys(), key=len, reverse=True):
+        text = re.sub(re.escape(phrase), SYNONYMS[phrase], text, flags=re.IGNORECASE)
+    return text
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -449,17 +468,12 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через OpenRouter (Inkling Small) ----------
+# ---------- Рерайт через Groq ----------
 def rewrite_news(title, body):
-    print("Попытка рерайта через OpenRouter с Inkling Small")
+    print("Попытка рерайта через Groq (openai/gpt-oss-120b)")
     try:
-        api_url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://t.me/anime_news",  # замените на ваш канал
-            "X-Title": "Anime News"
-        }
+        import groq
+        client = groq.Groq(api_key=GROQ_API_KEY)
         prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
 
 Исходный заголовок: {title}
@@ -470,18 +484,17 @@ def rewrite_news(title, body):
 Заголовок: <новый заголовок>
 Текст: <новый текст>
 """
-        payload = {
-            "model": "thinkingmachines/inkling-small:free",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9,
-            "top_p": 0.9,
-            "max_tokens": 2048
-        }
-        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        result = response.json()
-        generated_text = result["choices"][0]["message"]["content"].strip()
-        print(f"Ответ Inkling: {generated_text}")
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=1,
+            max_completion_tokens=2048,
+            top_p=1,
+            reasoning_effort="medium",
+            stream=False
+        )
+        generated_text = completion.choices[0].message.content.strip()
+        print(f"Ответ Groq: {generated_text}")
 
         new_title = title
         new_body = body
@@ -494,8 +507,8 @@ def rewrite_news(title, body):
 
         return new_title, new_body
     except Exception as e:
-        print(f"Ошибка рерайта: {e}")
-        return title, body
+        print(f"Ошибка рерайта через Groq: {e}")
+        return simple_synonymize(title), simple_synonymize(body)
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
@@ -507,9 +520,12 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт через OpenRouter
-    if OPENROUTER_API_KEY:
+    # Применяем рерайт
+    if GROQ_API_KEY:
         title, body = rewrite_news(title, body)
+    else:
+        title = simple_synonymize(title)
+        body = simple_synonymize(body)
 
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
