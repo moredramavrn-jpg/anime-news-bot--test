@@ -439,23 +439,6 @@ def format_news_body(text):
     text = remove_garbage_lines(text)
     return text
 
-def embed_video_link(text, video_url):
-    """Заменяет первое вхождение слов 'трейлер' или 'видео' на гиперссылку."""
-    if not video_url:
-        return text
-    # Ищем слово 'трейлер' или 'видео' (регистронезависимо)
-    pattern = re.compile(r'(трейлер|видео)', re.IGNORECASE)
-    match = pattern.search(text)
-    if match:
-        word = match.group(0)
-        start, end = match.span()
-        # Оборачиваем найденное слово в ссылку
-        linked_word = f'<a href="{video_url}">{word}</a>'
-        return text[:start] + linked_word + text[end:]
-    else:
-        # Если не найдено, добавляем ссылку на слово "трейлер" в конце? Нет, просто возвращаем текст
-        return text
-
 def escape_html(text):
     return html.escape(text, quote=False)
 
@@ -483,10 +466,6 @@ def build_post_html(title, body, emoji='📄', video_url=None):
     title_esc = escape_html(title)
     body_formatted = format_news_body(body) if body else ""
 
-    # Если есть видео, встраиваем ссылку в текст
-    if video_url and body_formatted:
-        body_formatted = embed_video_link(body_formatted, video_url)
-
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
     if body_formatted:
@@ -498,8 +477,13 @@ def build_post_html(title, body, emoji='📄', video_url=None):
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
 
+    hashtags_str = " ".join(hashtags)
+
+    if video_url:
+        hashtags_str += f" ({video_url})"
+
     parts.append("")
-    parts.append("🏷️ " + " ".join(hashtags))
+    parts.append(f"🏷️ {hashtags_str}")
 
     return "\n".join(parts)
 
@@ -626,12 +610,13 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
     if len(plain_text) <= max_len:
         return full_html
 
-    # Если не влезает, обрезаем тело
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
     tags_str = " ".join(hashtags)
+    if video_url:
+        tags_str += f" ({video_url})"
 
     title_plain = f"{emoji} {title}"
     separator_plain = "┄┄┄ ✦ ┄┄┄"
@@ -643,10 +628,7 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
     if available < 50:
         return truncate_by_words(plain_text, max_len)
 
-    # Форматируем тело с учётом возможной ссылки
     body_formatted = format_news_body(body)
-    if video_url:
-        body_formatted = embed_video_link(body_formatted, video_url)
     body_paragraphs = body_formatted.split('\n\n')
     chosen = []
     current_len = 0
@@ -666,6 +648,10 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
+    # Если есть YouTube-видео, игнорируем картинку
+    if is_youtube and video_url:
+        image_url = None
+
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
@@ -675,17 +661,16 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Если YouTube, приводим ссылку к короткому виду
-    final_video_url = to_short_youtube_url(video_url) if (video_url and is_youtube) else video_url
-
     title, body = rewrite_news(title, body)
+
+    final_video_url = to_short_youtube_url(video_url) if (video_url and is_youtube) else video_url
 
     if image_url:
         full_message = build_caption_fit(title, body, emoji, 1024, final_video_url)
     else:
         full_message = build_post_html(title, body, emoji, final_video_url)
 
-    # Отправка
+    # Отправка прямого видео (mp4/webm)
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
@@ -702,11 +687,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    # Если видео YouTube и нет картинки – обычное сообщение
-    if final_video_url and is_youtube and not image_url:
-        bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
-        return
-
+    # Если YouTube, отправляем обычное сообщение (ссылка уже в тексте)
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
