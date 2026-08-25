@@ -462,6 +462,22 @@ def extract_title_hashtag(title):
         return make_hashtag(anime_name)
     return None
 
+def build_hashtags_line(title, video_url=None):
+    """Формирует строку с хэштегами, при наличии video_url прячет ссылку в последний тег."""
+    hashtags = ["#аниме", "#новости"]
+    title_tag = extract_title_hashtag(title)
+    if title_tag and title_tag not in hashtags:
+        hashtags.append(title_tag)
+
+    if video_url and title_tag:
+        # Оборачиваем последний тег в гиперссылку
+        hashtags[-1] = f'<a href="{video_url}">{title_tag}</a>'
+    elif video_url:
+        # Если title_tag нет, просто добавляем ссылку в скобках? Нет, не показываем.
+        pass
+
+    return " ".join(hashtags)
+
 def build_post_html(title, body, emoji='📄', video_url=None):
     title_esc = escape_html(title)
     body_formatted = format_news_body(body) if body else ""
@@ -472,18 +488,9 @@ def build_post_html(title, body, emoji='📄', video_url=None):
         parts.append("┄┄┄ ✦ ┄┄┄")
         parts.append(body_formatted)
 
-    hashtags = ["#аниме", "#новости"]
-    title_tag = extract_title_hashtag(title)
-    if title_tag and title_tag not in hashtags:
-        hashtags.append(title_tag)
-
-    hashtags_str = " ".join(hashtags)
-
-    if video_url:
-        hashtags_str += f" ({video_url})"
-
+    hashtags_line = build_hashtags_line(title, video_url)
     parts.append("")
-    parts.append(f"🏷️ {hashtags_str}")
+    parts.append(f"🏷️ {hashtags_line}")
 
     return "\n".join(parts)
 
@@ -610,19 +617,12 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
     if len(plain_text) <= max_len:
         return full_html
 
-    hashtags = ["#аниме", "#новости"]
-    title_tag = extract_title_hashtag(title)
-    if title_tag and title_tag not in hashtags:
-        hashtags.append(title_tag)
-    tags_str = " ".join(hashtags)
-    if video_url:
-        tags_str += f" ({video_url})"
-
+    hashtags_line = build_hashtags_line(title, video_url)
     title_plain = f"{emoji} {title}"
     separator_plain = "┄┄┄ ✦ ┄┄┄"
-    footer_plain = f"🏷️ {tags_str}"
+    footer_plain = f"🏷️ {hashtags_line}"
 
-    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6
+    base_len = len(title_plain) + len(separator_plain) + len(strip_html_tags(footer_plain)) + 6
     available = max_len - base_len
 
     if available < 50:
@@ -645,7 +645,7 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
             break
 
     truncated_body = '\n\n'.join(chosen)
-    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
+    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {hashtags_line}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     # Если есть YouTube-видео, игнорируем картинку
@@ -670,7 +670,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         full_message = build_post_html(title, body, emoji, final_video_url)
 
-    # Отправка прямого видео (mp4/webm)
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
@@ -687,7 +686,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    # Если YouTube, отправляем обычное сообщение (ссылка уже в тексте)
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
