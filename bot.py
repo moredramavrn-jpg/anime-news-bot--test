@@ -338,7 +338,7 @@ def simple_truncate_by_sentences(text, max_len):
     return result
 
 def clean_think_tags(text):
-    """Удаляет всё, что находится до последнего </think>."""
+    """Удаляет блоки <think>...</think> и всё до последнего </think>."""
     end_idx = text.rfind('</think>')
     if end_idx != -1:
         return text[end_idx + len('</think>'):].strip()
@@ -350,36 +350,11 @@ def clean_think_tags(text):
 def format_news_body(text):
     if not text:
         return ""
+    # Простая очистка, без HTML-тегов
     text = re.sub(r'\n(?!\n)', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = re.sub(r' {2,}', ' ', text).strip()
-
-    unwanted_phrases = [
-        r'Читать дальше\s*→?',
-        r'Читать полностью\s*:?',
-        r'Источник\s*:',
-    ]
-    for pattern in unwanted_phrases:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-
-    if '\n\n' in text:
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    else:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if len(sentences) <= 1:
-            paragraphs = [text]
-        else:
-            paragraphs = []
-            current = []
-            for sent in sentences:
-                current.append(sent)
-                if len(current) == 2:
-                    paragraphs.append(" ".join(current))
-                    current = []
-            if current:
-                paragraphs.append(" ".join(current))
-
-    return "\n\n".join(paragraphs)
+    return text
 
 def escape_html(text):
     return html.escape(text, quote=False)
@@ -412,9 +387,7 @@ def build_post_html(title, body, emoji='📄'):
 
     if body_esc:
         parts.append("┄┄┄ ✦ ┄┄┄")
-        # Выделяем названия в кавычках «...» жирным (после экранирования)
-        body_with_quotes = re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", body_esc)
-        parts.append(body_with_quotes)
+        parts.append(body_esc)
 
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
@@ -472,7 +445,7 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Убираем возможные HTML-теги из результата Groq
+        # Убираем возможные HTML-теги
         new_title = re.sub(r'<[^>]+>', '', new_title)
         new_body = re.sub(r'<[^>]+>', '', new_body)
 
