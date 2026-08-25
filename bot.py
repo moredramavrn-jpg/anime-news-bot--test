@@ -357,7 +357,6 @@ def simple_truncate_by_sentences(text, max_len):
     return result
 
 def fix_quotes(text):
-    """Заменяет прямые кавычки на ёлочки, чередуя открывающие и закрывающие."""
     result = []
     open_quote = False
     for ch in text:
@@ -375,9 +374,8 @@ def fix_quotes(text):
 def clean_and_paragraph(text):
     if not text:
         return ""
-    # Заменяем все переносы строк на пробелы
+    # Все переносы строк -> пробел
     text = re.sub(r'\s*\n\s*', ' ', text)
-    # Схлопываем множественные пробелы
     text = re.sub(r' {2,}', ' ', text).strip()
     # Разбиваем на предложения
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -395,8 +393,22 @@ def clean_and_paragraph(text):
         paragraphs.append(" ".join(current))
     return "\n\n".join(paragraphs)
 
+def alternate_blockquote(text):
+    """Чередует обычные абзацы и цитаты: первый обычный, второй цитата и т.д."""
+    paragraphs = text.split('\n\n')
+    formatted = []
+    for i, para in enumerate(paragraphs):
+        if i % 2 == 1:  # каждый второй абзац – цитата
+            formatted.append(f"<blockquote>{para}</blockquote>")
+        else:
+            formatted.append(para)
+    return "\n\n".join(formatted)
+
 def format_news_body(text):
-    return clean_and_paragraph(text)
+    """Полная обработка: нормализация, кавычки, абзацы, цитаты."""
+    text = clean_and_paragraph(text)
+    text = fix_quotes(text)
+    return alternate_blockquote(text)
 
 def escape_html(text):
     return html.escape(text, quote=False)
@@ -542,9 +554,7 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Применяем исправление кавычек и разбивку на абзацы
         new_title = fix_quotes(new_title)
-        new_body = fix_quotes(new_body)
         new_body = clean_and_paragraph(new_body)
 
         if new_title and new_body:
