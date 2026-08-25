@@ -18,8 +18,7 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss",
-    "https://news.google.com/rss/search?q=site:kanobu.ru/animes&hl=ru&gl=RU&ceid=RU:ru"
+    "https://kg-portal.ru/rss/news_anime.rss"
 ]
 
 POSTED_FILE = "posted.txt"
@@ -200,8 +199,6 @@ def extract_image_url_from_entry(entry):
         link = entry.get('link', '')
         if 'kg-portal.ru' in link:
             base_domain = 'https://kg-portal.ru'
-        elif 'kanobu.ru' in link:
-            base_domain = 'https://kanobu.ru'
 
     if 'media_content' in entry:
         for media in entry.media_content:
@@ -498,6 +495,36 @@ def is_podcast_entry(entry):
         return True
     return False
 
+def rewrite_news(title, body):
+    """
+    Лёгкий рерайт заголовка и текста через Hugging Face.
+    Возвращает (new_title, new_body) или оригиналы в случае ошибки.
+    """
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты и имена. Избегай дословного копирования. Пиши на русском языке.
+
+Заголовок: {title}
+
+Текст: {body}
+
+Выведи результат в формате:
+Заголовок: <новый заголовок>
+Текст: <новый текст>
+"""
+    result = call_hf_api(prompt)
+    if result:
+        lines = result.split('\n')
+        new_title = title
+        new_body = body
+        for line in lines:
+            line = line.strip()
+            if line.startswith('Заголовок:'):
+                new_title = line.replace('Заголовок:', '').strip()
+            elif line.startswith('Текст:'):
+                new_body = line.replace('Текст:', '').strip()
+        if new_title and new_body:
+            return new_title, new_body
+    return title, body
+
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
         emoji = '🎬'
@@ -507,6 +534,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         emoji = '🖼️'
     else:
         emoji = '📄'
+
+    # Применяем уникализацию через ИИ (если есть ключ HF_API_KEY)
+    if HF_API_KEY:
+        title, body = rewrite_news(title, body)
 
     if video_url or image_url:
         body = smart_truncate(body, 800) if body else ""
