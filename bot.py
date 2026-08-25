@@ -356,6 +356,22 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
+def truncate_by_words(text, max_len):
+    if len(text) <= max_len:
+        return text
+    words = text.split()
+    result = []
+    current_len = 0
+    for w in words:
+        if current_len + len(w) + 1 > max_len:
+            break
+        result.append(w)
+        current_len += len(w) + 1
+    return ' '.join(result)
+
+def strip_html_tags(text):
+    return re.sub(r'<[^>]+>', '', text)
+
 def fix_quotes(text):
     result = []
     open_quote = False
@@ -548,8 +564,7 @@ def rewrite_news(title, body):
                 new_body = line.replace('Текст:', '').strip()
 
         new_title = fix_quotes(new_title)
-        # Не разбиваем на абзацы здесь, это сделает build_post_html
-        # new_body = clean_and_paragraph(new_body)  # убрали
+        # Не делаем clean_and_paragraph здесь, чтобы не дублировать
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -562,57 +577,52 @@ def rewrite_news(title, body):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
-    full = build_post_html(title, body, emoji)
-    if len(full) <= max_len:
-        return full
+    # Полный вариант с учётом HTML
+    full_html = build_post_html(title, body, emoji)
+    plain_text = strip_html_tags(full_html)
 
-    # Строим подпись с сохранением абзацев
+    if len(plain_text) <= max_len:
+        return full_html
+
+    # Если превышаем, обрезаем тело (входной body) до нужного размера
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
-    tags_str = "🏷️ " + " ".join(hashtags)
+    tags_str = " ".join(hashtags)
 
-    title_part = f"{emoji} <b>{escape_html(title)}</b>"
-    separator = "┄┄┄ ✦ ┄┄┄"
-    tail = f"{separator}\n{tags_str}"
+    # Определяем, сколько чистых символов занимают заголовок и хэштеги
+    title_plain = f"{emoji} {title}"
+    separator_plain = "┄┄┄ ✦ ┄┄┄"
+    footer_plain = f"🏷️ {tags_str}"
 
-    available_for_body = max_len - len(title_part) - len(tail) - 5
-    if available_for_body < 50:
-        return truncate_by_words(full, max_len)  # fallback
+    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6  # 6 на переносы строк
+    available = max_len - base_len
 
-    # body уже содержит абзацы? Проверим
+    if available < 50:
+        # Если места очень мало, просто обрезаем по словам весь текст
+        return truncate_by_words(plain_text, max_len)
+
+    # Форматируем тело и обрезаем по абзацам
     body_formatted = format_news_body(body)
     body_paragraphs = body_formatted.split('\n\n')
-
-    result_paragraphs = []
+    chosen = []
     current_len = 0
     for para in body_paragraphs:
-        if current_len + len(para) + 2 <= available_for_body:
-            result_paragraphs.append(para)
-            current_len += len(para) + 2
+        para_plain = strip_html_tags(para)
+        if current_len + len(para_plain) + 2 <= available:
+            chosen.append(para)
+            current_len += len(para_plain) + 2
         else:
-            # Обрезаем последний абзац по предложениям, чтобы влезть
-            truncated = simple_truncate_by_sentences(para, available_for_body - current_len)
-            if truncated:
-                result_paragraphs.append(truncated)
+            # Пытаемся влезть часть последнего абзаца
+            remaining = available - current_len
+            if remaining > 20:
+                truncated_para = truncate_by_words(para_plain, remaining)
+                chosen.append(truncated_para)
             break
-    truncated_body = '\n\n'.join(result_paragraphs)
 
-    return f"{title_part}\n{separator}\n{truncated_body}\n\n{tags_str}"
-
-def truncate_by_words(text, max_len):
-    if len(text) <= max_len:
-        return text
-    words = text.split()
-    result = []
-    current_len = 0
-    for w in words:
-        if current_len + len(w) + 1 > max_len:
-            break
-        result.append(w)
-        current_len += len(w) + 1
-    return ' '.join(result)
+    truncated_body = '\n\n'.join(chosen)
+    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
