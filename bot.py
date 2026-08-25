@@ -2,6 +2,7 @@ import os
 import re
 import html
 import io
+import json
 import feedparser
 import telebot
 import requests
@@ -25,7 +26,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "llama-3.3-70b-versatile"   # более мощная модель
+GROQ_MODEL = "qwen/qwen3.6-27b"   # вернули доступную модель
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -430,53 +431,36 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq ----------
+# ---------- Рерайт через Groq (JSON) ----------
 def rewrite_news(title, body, target_len=800):
-    print(f"Пытаюсь переписать через Groq: {title} (целевая длина: {target_len})")
+    print(f"Пытаюсь переписать через Groq: {title}")
     try:
-        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными и краткими. Сократи текст до {target_len} символов, сохранив все ключевые факты и имена. Пиши на русском языке, используй только русские буквы. Разделяй абзацы двойным переносом строки.
+        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными и краткими. Сократи текст до {target_len} символов, сохранив все ключевые факты и имена. Пиши на русском языке. Верни результат в виде JSON с полями "title" и "text".
 
 Заголовок: {title}
 
 Текст: {body[:1500]}
-
-Выведи результат строго в формате:
-Заголовок: <новый заголовок>
-Текст: <новый текст>
 """
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла и делать их краткими."},
+                {"role": "system", "content": "Ты — опытный копирайтер. Возвращай только JSON."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.5,
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
-        cleaned = clean_generated_text(generated_text)
-
-        # Проверка на мусорные фразы
-        if re.search(r'Input Headline|Input Text|Thinking Process', cleaned, re.IGNORECASE):
-            print("Обнаружены размышления модели, использую оригинал")
-            return title, body
-
-        # Ищем заголовок и текст
-        title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?=\n\s*Текст\s*[:：]|$)', cleaned, re.DOTALL)
-        body_match = re.search(r'Текст\s*[:：]\s*(.*?)$', cleaned, re.DOTALL)
-
-        new_title = title
-        new_body = body
-
-        if title_match:
-            new_title = clean_generated_text(title_match.group(1))
-        if body_match:
-            new_body = clean_generated_text(body_match.group(1))
-
-        if new_title and new_body and (new_title != title or new_body != body):
-            return new_title, new_body
+        # Пытаемся извлечь JSON из ответа
+        json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group(0))
+            new_title = data.get('title', title)
+            new_body = data.get('text', body)
+            if new_title and new_body and (new_title != title or new_body != body):
+                return new_title, new_body
         else:
-            print("Groq не вернул корректный результат, используем оригинал")
+            print("JSON не найден, используем оригинал")
             return title, body
     except Exception as e:
         print(f"Ошибка при рерайте через Groq: {e}")
@@ -518,8 +502,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
-    # Очистка от возможных артефактов
-    body = re.sub(r'^(?:🎬|🎞️|🖼️|Текст\s*[:：])\s*', '', body)
     body = format_news_body(body)
 
     if target_len:
