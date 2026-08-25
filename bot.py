@@ -356,6 +356,20 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
+def truncate_by_words(text, max_len):
+    """Обрезает текст по словам, не разрывая слова."""
+    if len(text) <= max_len:
+        return text
+    words = text.split()
+    result = []
+    current_len = 0
+    for w in words:
+        if current_len + len(w) + 1 > max_len:
+            break
+        result.append(w)
+        current_len += len(w) + 1
+    return ' '.join(result)
+
 def fix_quotes(text):
     result = []
     open_quote = False
@@ -382,12 +396,9 @@ def clean_and_paragraph(text):
 
     paragraphs = []
     current = []
-
-    # Порог "длинного" предложения – 120 символов
     LONG_SENTENCE_THRESHOLD = 120
 
     for sent in sentences:
-        # Если предложение длинное, завершаем текущий абзац и начинаем новый
         if len(sent) >= LONG_SENTENCE_THRESHOLD:
             if current:
                 paragraphs.append(" ".join(current))
@@ -572,35 +583,8 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     if len(full) <= max_len:
         return full
 
-    hashtags = ["#аниме", "#новости"]
-    title_tag = extract_title_hashtag(title)
-    if title_tag and title_tag not in hashtags:
-        hashtags.append(title_tag)
-    tags_str = "🏷️ " + " ".join(hashtags)
-
-    title_part = f"{emoji} <b>{escape_html(title)}</b>"
-    separator = "┄┄┄ ✦ ┄┄┄"
-    tail = f"{separator}\n{tags_str}"
-
-    available_for_body = max_len - len(title_part) - len(tail) - 5
-    if available_for_body < 50:
-        return full[:max_len]
-
-    body_paragraphs = body.split('\n\n')
-    result_body = []
-    current_len = 0
-    for para in body_paragraphs:
-        if current_len + len(para) + 2 <= available_for_body:
-            result_body.append(para)
-            current_len += len(para) + 2
-        else:
-            truncated = simple_truncate_by_sentences(para, available_for_body - current_len)
-            if truncated:
-                result_body.append(truncated)
-            break
-    truncated_body = '\n\n'.join(result_body)
-
-    return f"{title_part}\n{separator}\n{truncated_body}\n\n{tags_str}"
+    # Используем функцию truncate_by_words для гарантированного обрезания по словам
+    return truncate_by_words(full, max_len)
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
