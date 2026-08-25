@@ -5,7 +5,6 @@ import io
 import feedparser
 import telebot
 import requests
-import yt_dlp
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
@@ -26,7 +25,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"   # или "llama-3.3-70b-versatile"
+GROQ_MODEL = "qwen/qwen3.6-27b"   # можно заменить на "llama-3.3-70b-versatile"
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -252,6 +251,7 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
+    # 1. Прямые видеофайлы (mp4/webm)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -274,6 +274,7 @@ def extract_video_url_from_page(soup):
     if match:
         return html.unescape(match.group(1)), False
 
+    # 2. YouTube
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
@@ -307,27 +308,6 @@ def fetch_video_info(entry, soup=None):
     if soup:
         return extract_video_url_from_page(soup)
     return None, False
-
-def download_youtube_video(youtube_url):
-    try:
-        ydl_opts = {
-            'format': 'best[ext=mp4]',
-            'outtmpl': '-',
-            'quiet': True,
-            'noplaylist': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            video_url = info.get('url')
-            if video_url:
-                r = requests.get(video_url, stream=True, timeout=30)
-                r.raise_for_status()
-                video_bytes = io.BytesIO(r.content)
-                video_bytes.seek(0)
-                return video_bytes
-    except Exception as e:
-        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
-    return None
 
 def download_image(url, referer=None):
     try:
@@ -450,11 +430,9 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq ----------
+# ---------- Рерайт через Groq (с отладкой) ----------
 def rewrite_news(title, body):
-    """
-    Переписывает заголовок и текст через Groq, делая их уникальными.
-    """
+    print(f"Пытаюсь переписать через Groq: {title}")
     try:
         prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
 
@@ -476,6 +454,7 @@ def rewrite_news(title, body):
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
+        print(f"Ответ Groq (первые 200 символов): {generated_text[:200]}")
 
         new_title = title
         new_body = body
@@ -508,7 +487,11 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     # Применяем рерайт через Groq
     if GROQ_API_KEY:
+        print("Вызываю rewrite_news...")
         title, body = rewrite_news(title, body)
+        print("Рерайт завершён")
+    else:
+        print("GROQ_API_KEY не задан, пропускаю рерайт")
 
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
@@ -517,6 +500,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     message_text = build_post_html(title, body, emoji)
 
+    # Прямое видео (mp4/webm)
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=message_text[:1024], parse_mode='HTML')
@@ -524,15 +508,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
 
+    # YouTube: отправляем короткую ссылку с превью
     if video_url and is_youtube:
-        video_file = download_youtube_video(video_url)
-        if video_file:
-            try:
-                bot.send_video(CHANNEL_ID, video_file, caption=message_text[:1024], parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить скачанное видео: {e}")
-
         short_url = to_short_youtube_url(video_url)
         bot.send_message(
             CHANNEL_ID,
@@ -542,6 +519,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         )
         return
 
+    # Картинка
     if image_url:
         image_file = download_image(image_url, referer=link)
         if image_file:
@@ -554,6 +532,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
+    print(f"GROQ_API_KEY задан: {bool(GROQ_API_KEY)}")
+    if not GROQ_API_KEY:
+        print("ВНИМАНИЕ: GROQ_API_KEY отсутствует, рерайт отключён")
+
     links, titles = load_posted()
     new_posts = 0
 
