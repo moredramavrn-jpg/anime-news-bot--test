@@ -356,21 +356,34 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
+def fix_quotes(text):
+    """Заменяет прямые кавычки на ёлочки, чередуя открывающие и закрывающие."""
+    result = []
+    open_quote = False
+    for ch in text:
+        if ch == '"':
+            if not open_quote:
+                result.append('«')
+                open_quote = True
+            else:
+                result.append('»')
+                open_quote = False
+        else:
+            result.append(ch)
+    return ''.join(result)
+
 def clean_and_paragraph(text):
-    """Нормализует текст: убирает лишние переносы, схлопывает пробелы, разбивает на абзацы по 2-3 предложения."""
     if not text:
         return ""
-    # Одиночные переносы -> пробел
-    text = re.sub(r'\n(?!\n)', ' ', text)
-    # Множественные пробелы -> один
-    text = re.sub(r' {2,}', ' ', text)
-    # Убираем совсем пустые строки
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
-    # Делим на предложения
+    # Заменяем все переносы строк на пробелы
+    text = re.sub(r'\s*\n\s*', ' ', text)
+    # Схлопываем множественные пробелы
+    text = re.sub(r' {2,}', ' ', text).strip()
+    # Разбиваем на предложения
     sentences = re.split(r'(?<=[.!?])\s+', text)
     if len(sentences) <= 1:
         return text
-    # Группируем по 2 предложения в абзац
+    # Группируем по 2 предложения
     paragraphs = []
     current = []
     for sent in sentences:
@@ -383,7 +396,6 @@ def clean_and_paragraph(text):
     return "\n\n".join(paragraphs)
 
 def format_news_body(text):
-    # Используем новую нормализацию
     return clean_and_paragraph(text)
 
 def escape_html(text):
@@ -480,10 +492,10 @@ def rewrite_news(title, body):
         print("GigaChat: не удалось получить токен")
         return title, body
 
-    body_part = body[:1500]   # чуть больше исходного текста
+    body_part = body[:1500]
 
     prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия.
-Обязательно разбей текст на 2-3 логических абзаца, каждый абзац должен содержать 2-3 предложения.
+Обязательно разбей текст на логические абзацы, каждый абзац должен содержать ровно 2 предложения.
 Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы.
 Пиши на русском языке.
 
@@ -530,7 +542,9 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Нормализуем и разбиваем на абзацы
+        # Применяем исправление кавычек и разбивку на абзацы
+        new_title = fix_quotes(new_title)
+        new_body = fix_quotes(new_body)
         new_body = clean_and_paragraph(new_body)
 
         if new_title and new_body:
@@ -562,7 +576,6 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     if available_for_body < 50:
         return full[:max_len]
 
-    # Уже разбитый на абзацы текст обрезаем по предложениям, сохраняя абзацы
     body_paragraphs = body.split('\n\n')
     result_body = []
     current_len = 0
@@ -571,7 +584,6 @@ def build_caption_fit(title, body, emoji, max_len=1024):
             result_body.append(para)
             current_len += len(para) + 2
         else:
-            # обрезаем последний абзац по предложениям
             truncated = simple_truncate_by_sentences(para, available_for_body - current_len)
             if truncated:
                 result_body.append(truncated)
