@@ -456,7 +456,9 @@ def rewrite_news(title, body):
         api_url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://your-anime-channel.t.me",  # замените на свой URL
+            "X-Title": "Anime News Bot"
         }
         prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
 
@@ -469,7 +471,7 @@ def rewrite_news(title, body):
 Текст: <новый текст>
 """
         payload = {
-            "model": "poolside/laguna-s-2.1:free",   # <-- точное название модели
+            "model": "poolside/laguna-s-2.1:free",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.9,
             "top_p": 0.9,
