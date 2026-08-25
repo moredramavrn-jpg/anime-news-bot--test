@@ -25,7 +25,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"   # можно заменить на "llama-3.3-70b-versatile"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -71,9 +71,8 @@ def clean_html(raw_html):
     soup = BeautifulSoup(raw_html, "lxml")
     for script in soup(["script", "style"]):
         script.decompose()
-    text = soup.get_text(separator=" ")   # используем пробел, чтобы не было лишних переносов
-    # схлопываем множественные пробелы
-    text = re.sub(r' {2,}', ' ', text).strip()
+    text = soup.get_text(separator=" ")
+    text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def make_absolute(url, base_domain):
@@ -103,9 +102,9 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    main_content = soup.select_one('div.editor-body')  # Goha.ru
+    main_content = soup.select_one('div.editor-body')
     if not main_content:
-        main_content = soup.select_one('div.news_text')  # КГ-Портал
+        main_content = soup.select_one('div.news_text')
 
     if not main_content:
         selectors = [
@@ -325,19 +324,6 @@ def download_image(url, referer=None):
         return None
 
 # ---------- Обработка текста ----------
-def simple_truncate_by_sentences(text, max_len):
-    if len(text) <= max_len:
-        return text
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    result = ""
-    for s in sentences:
-        if len(result) + len(s) + 1 > max_len:
-            break
-        result = (result + " " + s).strip()
-    if not result:
-        return text[:max_len]
-    return result
-
 def clean_think_tags(text):
     """Удаляет всё, что находится до последнего </think>."""
     end_idx = text.rfind('</think>')
@@ -349,10 +335,14 @@ def clean_think_tags(text):
     return text.strip()
 
 def format_news_body(text):
+    """
+    Разбивает текст на абзацы по 2 предложения.
+    Если в тексте уже есть двойные переносы, использует их как абзацы.
+    """
     if not text:
         return ""
 
-    # Удаляем нежелательные фразы
+    # Убираем нежелательные фразы
     unwanted_phrases = [
         r'Читать дальше\s*→?',
         r'Читать полностью\s*:?',
@@ -364,24 +354,27 @@ def format_news_body(text):
     # Нормализуем пробелы
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Если текст содержит двойные переносы, используем их как абзацы
+    # Если текст уже с абзацами, оставляем
     if '\n\n' in text:
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    else:
-        # Разбиваем на предложения
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if len(sentences) <= 1:
-            return text
-        # Группируем по 2 предложения
-        paragraphs = []
-        current = []
-        for sent in sentences:
-            current.append(sent)
-            if len(current) == 2:
-                paragraphs.append(" ".join(current))
-                current = []
-        if current:
+        return "\n\n".join(paragraphs)
+
+    # Разбиваем на предложения
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) <= 2:
+        # Если предложений мало, возвращаем как есть, но без лишних пробелов
+        return text
+
+    # Группируем по 2 предложения
+    paragraphs = []
+    current = []
+    for sent in sentences:
+        current.append(sent)
+        if len(current) == 2:
             paragraphs.append(" ".join(current))
+            current = []
+    if current:
+        paragraphs.append(" ".join(current))
 
     return "\n\n".join(paragraphs)
 
@@ -477,7 +470,6 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        # Убираем возможные HTML-теги из результата Groq
         new_title = re.sub(r'<[^>]+>', '', new_title)
         new_body = re.sub(r'<[^>]+>', '', new_body)
 
@@ -489,6 +481,22 @@ def rewrite_news(title, body):
     except Exception as e:
         print(f"Ошибка при рерайте через Groq: {e}")
         return title, body
+
+def truncate_by_paragraphs(text, max_len):
+    """Обрезает текст до max_len, сохраняя целые абзацы."""
+    if len(text) <= max_len:
+        return text
+    paragraphs = text.split('\n\n')
+    result = []
+    current_len = 0
+    for p in paragraphs:
+        if current_len + len(p) + 2 > max_len:
+            break
+        result.append(p)
+        current_len += len(p) + 2
+    if not result:  # если первый абзац слишком длинный, берём часть
+        return text[:max_len]
+    return '\n\n'.join(result)
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
@@ -508,13 +516,14 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
-    # После рерайта применяем форматирование абзацев
+    # Всегда разбиваем на абзацы
     body = format_news_body(body)
 
+    # Ограничиваем длину в зависимости от наличия медиа
     if video_url or image_url:
-        body = simple_truncate_by_sentences(body, 800) if body else ""
+        body = truncate_by_paragraphs(body, 800) if body else ""
     else:
-        body = simple_truncate_by_sentences(body, 3000) if body else ""
+        body = truncate_by_paragraphs(body, 3000) if body else ""
 
     message_text = build_post_html(title, body, emoji)
 
