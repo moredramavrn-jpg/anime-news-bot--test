@@ -453,7 +453,6 @@ def is_podcast_entry(entry):
 
 # ---------- GigaChat API ----------
 def get_gigachat_token():
-    """Получает токен доступа GigaChat."""
     url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -471,15 +470,13 @@ def get_gigachat_token():
         return None
 
 def rewrite_news(title, body):
-    """
-    Переписывает заголовок и текст через GigaChat, делая их уникальными.
-    """
     if not (GIGACHAT_CLIENT_ID and GIGACHAT_CLIENT_SECRET):
+        print("GigaChat: нет ключей, рерайт не выполняется")
         return title, body
 
     token = get_gigachat_token()
     if not token:
-        print("Не удалось получить токен GigaChat, используем оригинал")
+        print("GigaChat: не удалось получить токен")
         return title, body
 
     prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
@@ -494,7 +491,7 @@ def rewrite_news(title, body):
 """
     try:
         response = requests.post(
-            "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+            "https://api.giga.chat/v1/chat/completions",   # <-- обновлённый endpoint
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
@@ -524,9 +521,10 @@ def rewrite_news(title, body):
                 new_body = line.replace('Текст:', '').strip()
 
         if new_title and new_body:
+            print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
             return new_title, new_body
         else:
-            print("GigaChat не вернул корректный результат, используем оригинал")
+            print("GigaChat: не удалось распознать результат")
             return title, body
     except Exception as e:
         print(f"Ошибка при рерайте через GigaChat: {e}")
@@ -542,7 +540,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт через GigaChat
+    # Рерайт через GigaChat
     title, body = rewrite_news(title, body)
 
     if video_url or image_url:
