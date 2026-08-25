@@ -2,13 +2,12 @@ import os
 import re
 import html
 import io
-import json
 import feedparser
 import telebot
 import requests
 import yt_dlp
 from difflib import SequenceMatcher
-from urllib.parse import urljoin, urlparse, unquote, quote
+from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
 
@@ -19,21 +18,14 @@ HF_API_KEY = os.getenv("HF_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss"
+    "https://kg-portal.ru/rss/news_anime.rss",
+    "https://news.google.com/rss/search?q=site:kanobu.ru/animes&hl=ru&gl=RU&ceid=RU:ru"
 ]
-KANOBU_URL = "https://kanobu.ru/animes/"
 
 POSTED_FILE = "posted.txt"
 HF_MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
-]
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -90,39 +82,20 @@ def make_absolute(url, base_domain):
         return urljoin(base_domain, url)
     return url
 
-def get_page_soup(url, use_proxy=False):
+def get_page_soup(url):
     try:
         domain = urlparse(url).netloc
         headers = {
-            'User-Agent': USER_AGENTS[0],
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
             'Referer': f'https://{domain}/',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
         }
-        r = requests.get(url, headers=headers, timeout=20)
+        r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         return BeautifulSoup(r.text, 'lxml')
     except Exception as e:
         print(f"Ошибка загрузки {url}: {e}")
-        if use_proxy:
-            return get_page_via_proxy(url)
-        return None
-
-def get_page_via_proxy(url):
-    """Пытается получить страницу через allorigins (бесплатный прокси)."""
-    try:
-        proxy_url = f"https://api.allorigins.win/raw?url={quote(url, safe='')}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
-        r = requests.get(proxy_url, headers=headers, timeout=25)
-        r.raise_for_status()
-        return BeautifulSoup(r.text, 'lxml')
-    except Exception as e:
-        print(f"Ошибка загрузки через прокси {url}: {e}")
         return None
 
 def extract_full_text_from_page(soup):
@@ -578,58 +551,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
 
-# ---------- Получение Канобу с обходом ----------
-def fetch_kanobu_entries():
-    print("Пытаюсь загрузить Канобу...")
-    # Сначала обычный запрос
-    soup = get_page_soup(KANOBU_URL, use_proxy=False)
-    if not soup:
-        print("Обычный запрос не удался, пробую через прокси")
-        soup = get_page_soup(KANOBU_URL, use_proxy=True)
-    if not soup:
-        print("Не удалось загрузить страницу Канобу ни одним способом")
-        return []
-
-    # 1. Пробуем JSON-LD
-    for script in soup.find_all('script', type='application/ld+json'):
-        try:
-            data = json.loads(script.string)
-            if data.get('@type') == 'ItemList':
-                items = data.get('itemListElement', [])
-                print(f"JSON-LD найден, элементов: {len(items)}")
-                entries = []
-                for item in items[:10]:
-                    name = item.get('name')
-                    link = item.get('url')
-                    if name and link:
-                        entries.append({'title': name, 'link': link})
-                return entries
-        except Exception as e:
-            print(f"Ошибка парсинга JSON-LD: {e}")
-
-    # 2. Fallback: парсим HTML ссылки на новости
-    print("JSON-LD не найден, пробую HTML парсинг")
-    entries = []
-    for a in soup.select('a[href^="/news/"]'):
-        href = a.get('href')
-        title = a.get_text(strip=True)
-        if href and title and len(title) > 10:
-            link = urljoin(KANOBU_URL, href)
-            entries.append({'title': title, 'link': link})
-    unique = []
-    seen = set()
-    for e in entries:
-        if e['link'] not in seen:
-            seen.add(e['link'])
-            unique.append(e)
-    return unique[:10]
-
-# ---------- Главный цикл ----------
 def main():
     links, titles = load_posted()
     new_posts = 0
 
-    # 1. Обработка RSS-источников
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
@@ -662,29 +587,6 @@ def main():
                 print(f"Опубликовано: {title}")
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
-
-    # 2. Обработка Канобу
-    kanobu_entries = fetch_kanobu_entries()
-    for item in kanobu_entries:
-        title = item.get('title', 'Без названия')
-        link = item.get('link', '')
-        if is_duplicate(link, title, links, titles):
-            print(f"Дубликат пропущен: {title}")
-            continue
-
-        soup = get_page_soup(link, use_proxy=True) if link else None
-        full_text = extract_full_text_from_page(soup) if soup else ""
-        image_url = fetch_image_url({'link': link}, soup)
-        video_url, is_youtube = fetch_video_info({'link': link}, soup)
-
-        try:
-            send_post(title, full_text, link, image_url, video_url, is_youtube)
-            links.add(link)
-            titles.add(normalize_title(title))
-            new_posts += 1
-            print(f"Опубликовано: {title}")
-        except Exception as e:
-            print(f"Ошибка отправки для {link}: {e}")
 
     if new_posts > 0:
         save_posted(links, titles)
