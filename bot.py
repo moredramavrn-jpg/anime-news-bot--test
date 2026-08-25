@@ -25,7 +25,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "llama-3.3-70b-versatile"   # более мощная модель
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -336,7 +336,6 @@ def clean_think_tags(text):
 def clean_generated_text(text):
     text = clean_think_tags(text)
     text = re.sub(r'<[^>]+>', '', text)
-    # Убираем возможные артефакты в начале
     text = re.sub(r'^(?:Заголовок|Текст)\s*[:：]\s*', '', text, flags=re.IGNORECASE)
     text = text.strip('"\'')
     text = text.strip()
@@ -451,11 +450,16 @@ def rewrite_news(title, body, target_len=800):
                 {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла и делать их краткими."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.5,   # немного снизили для большей предсказуемости
+            temperature=0.5,
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
         cleaned = clean_generated_text(generated_text)
+
+        # Проверка на мусорные фразы
+        if re.search(r'Input Headline|Input Text|Thinking Process', cleaned, re.IGNORECASE):
+            print("Обнаружены размышления модели, использую оригинал")
+            return title, body
 
         # Ищем заголовок и текст
         title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?=\n\s*Текст\s*[:：]|$)', cleaned, re.DOTALL)
@@ -514,7 +518,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
-    # Очистка от возможных артефактов, которые могут остаться
+    # Очистка от возможных артефактов
     body = re.sub(r'^(?:🎬|🎞️|🖼️|Текст\s*[:：])\s*', '', body)
     body = format_news_body(body)
 
