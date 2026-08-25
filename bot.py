@@ -14,7 +14,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-HF_API_KEY = os.getenv("HF_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -449,53 +449,61 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Hugging Face ----------
+# ---------- Рерайт через Mistral ----------
 def rewrite_news(title, body):
     """
-    Пытается переписать заголовок и текст через модель mrm8488/bert2bert_shared-russian-paraphraser.
-    Если модель недоступна или результат слишком похож, возвращает оригинал.
+    Переписывает заголовок и текст через Mistral API с усиленным рерайтом.
     """
     try:
-        paraphraser_url = "https://api-inference.huggingface.co/models/mrm8488/bert2bert_shared-russian-paraphraser"
+        api_url = "https://api.mistral.ai/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {HF_API_KEY}",
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
             "Content-Type": "application/json"
         }
 
-        def paraphrase_text(text, max_length=512):
-            payload = {
-                "inputs": text,
-                "parameters": {
-                    "max_length": max_length,
-                    "temperature": 1.2,
-                    "top_p": 0.9,
-                    "do_sample": True,
-                    "early_stopping": False,
-                    "num_beams": 1,
-                    "repetition_penalty": 1.2
-                }
-            }
-            response = requests.post(paraphraser_url, headers=headers, json=payload, timeout=25)
-            response.raise_for_status()
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', text)
-            elif isinstance(result, dict):
-                return result.get('generated_text', text)
-            return text
+        prompt = f"""Ты — креативный редактор аниме-новостей. Твоя задача — ПОЛНОСТЬЮ переписать новость, чтобы она звучала уникально, но сохранила все ключевые факты, имена, названия и даты. 
+Не просто заменяй слова синонимами, а перестрой предложения, измени их порядок, добавь немного живых выражений (но не искажай факты). 
+Избегай дословного копирования исходного текста. Пиши на русском языке.
 
-        new_title = paraphrase_text(title, max_length=100)
-        body_part = body[:1000] if len(body) > 1000 else body
-        new_body = paraphrase_text(body_part, max_length=1024)
+Исходный заголовок: {title}
 
-        if (SequenceMatcher(None, title, new_title).ratio() < 0.95 and
-            SequenceMatcher(None, body_part, new_body).ratio() < 0.95):
+Исходный текст: {body[:1500]}
+
+Выведи результат строго в формате:
+Заголовок: <новый заголовок>
+Текст: <новый текст>
+"""
+        payload = {
+            "model": "mistral-small-latest",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.9,
+            "top_p": 0.9,
+            "max_tokens": 2048
+        }
+
+        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        generated_text = result["choices"][0]["message"]["content"].strip()
+
+        new_title = title
+        new_body = body
+
+        for line in generated_text.split('\n'):
+            line = line.strip()
+            if line.startswith('Заголовок:'):
+                new_title = line.replace('Заголовок:', '').strip()
+            elif line.startswith('Текст:'):
+                new_body = line.replace('Текст:', '').strip()
+
+        if new_title and new_body:
             return new_title, new_body
         else:
-            print("Парафраз не изменил текст, возвращаю оригинал")
+            print("Mistral не вернул корректный результат, используем оригинал")
             return title, body
+
     except Exception as e:
-        print(f"Ошибка парафраза: {e}")
+        print(f"Ошибка при рерайте через Mistral: {e}")
         return title, body
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
@@ -508,8 +516,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт, если есть ключ HF_API_KEY
-    if HF_API_KEY:
+    # Применяем рерайт через Mistral
+    if MISTRAL_API_KEY:
         title, body = rewrite_news(title, body)
 
     if video_url or image_url:
