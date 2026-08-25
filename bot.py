@@ -449,16 +449,16 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через OpenRouter (Laguna S 2.1 free) ----------
+# ---------- Рерайт через OpenRouter (Inkling Small) ----------
 def rewrite_news(title, body):
-    print("Попытка рерайта через OpenRouter с Laguna S 2.1 (free)")
+    print("Попытка рерайта через OpenRouter с Inkling Small")
     try:
         api_url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://your-anime-channel.t.me",  # замените на свой URL
-            "X-Title": "Anime News Bot"
+            "HTTP-Referer": "https://t.me/anime_news",  # замените на ваш канал
+            "X-Title": "Anime News"
         }
         prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
 
@@ -471,7 +471,7 @@ def rewrite_news(title, body):
 Текст: <новый текст>
 """
         payload = {
-            "model": "poolside/laguna-s-2.1:free",
+            "model": "thinkingmachines/inkling-small:free",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.9,
             "top_p": 0.9,
@@ -481,7 +481,7 @@ def rewrite_news(title, body):
         response.raise_for_status()
         result = response.json()
         generated_text = result["choices"][0]["message"]["content"].strip()
-        print(f"Ответ Laguna: {generated_text}")
+        print(f"Ответ Inkling: {generated_text}")
 
         new_title = title
         new_body = body
