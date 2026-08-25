@@ -6,6 +6,7 @@ import feedparser
 import telebot
 import requests
 import yt_dlp
+from groq import Groq
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
@@ -14,7 +15,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -24,6 +25,7 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -449,16 +451,23 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Mistral ----------
-def rewrite_news(title, body):
-    print(f"Попытка рерайта. Исходный заголовок: {title}")
-    try:
-        api_url = "https://api.mistral.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {MISTRAL_API_KEY}",
-            "Content-Type": "application/json"
-        }
+# ---------- Рерайт через Groq ----------
+def clean_groq_response(text):
+    """Удаляет блок <think>...</think> и всё до последнего </think>."""
+    end_idx = text.rfind('</think>')
+    if end_idx != -1:
+        text = text[end_idx + len('</think>'):].strip()
+    else:
+        start_idx = text.find('<think>')
+        if start_idx != -1:
+            text = text[start_idx + len('<think>'):].strip()
+    text = re.sub(r'<[^>]+>', '', text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return "\n".join(lines)
 
+def rewrite_news(title, body):
+    print(f"Попытка рерайта через Groq. Исходный заголовок: {title}")
+    try:
         prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
 
 Исходный заголовок: {title}
@@ -469,24 +478,20 @@ def rewrite_news(title, body):
 Заголовок: <новый заголовок>
 Текст: <новый текст>
 """
-        payload = {
-            "model": "mistral-large-latest",   # <-- модель заменена
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.9,
-            "top_p": 0.9,
-            "max_tokens": 2048
-        }
-
-        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()
-        result = response.json()
-        generated_text = result["choices"][0]["message"]["content"].strip()
-        print(f"Ответ Mistral: {generated_text}")
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.9,
+            max_tokens=2048
+        )
+        raw = response.choices[0].message.content.strip()
+        print(f"Ответ Groq: {raw}")
+        cleaned = clean_groq_response(raw)
 
         new_title = title
         new_body = body
 
-        for line in generated_text.split('\n'):
+        for line in cleaned.split('\n'):
             line = line.strip()
             if line.startswith('Заголовок:'):
                 new_title = line.replace('Заголовок:', '').strip()
@@ -498,7 +503,7 @@ def rewrite_news(title, body):
         return new_title, new_body
 
     except Exception as e:
-        print(f"Ошибка рерайта: {e}")
+        print(f"Ошибка рерайта через Groq: {e}")
         return title, body
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
@@ -511,8 +516,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт через Mistral
-    if MISTRAL_API_KEY:
+    # Применяем рерайт через Groq
+    if GROQ_API_KEY:
         title, body = rewrite_news(title, body)
 
     if video_url or image_url:
