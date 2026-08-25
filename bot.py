@@ -325,7 +325,6 @@ def download_image(url, referer=None):
 
 # ---------- Обработка текста ----------
 def clean_think_tags(text):
-    """Удаляет всё, что находится до последнего </think>."""
     end_idx = text.rfind('</think>')
     if end_idx != -1:
         return text[end_idx + len('</think>'):].strip()
@@ -335,14 +334,9 @@ def clean_think_tags(text):
     return text.strip()
 
 def format_news_body(text):
-    """
-    Разбивает текст на абзацы по 2 предложения.
-    Если в тексте уже есть двойные переносы, использует их как абзацы.
-    """
     if not text:
         return ""
 
-    # Убираем нежелательные фразы
     unwanted_phrases = [
         r'Читать дальше\s*→?',
         r'Читать полностью\s*:?',
@@ -351,21 +345,16 @@ def format_news_body(text):
     for pattern in unwanted_phrases:
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
-    # Нормализуем пробелы
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # Если текст уже с абзацами, оставляем
     if '\n\n' in text:
         paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         return "\n\n".join(paragraphs)
 
-    # Разбиваем на предложения
     sentences = re.split(r'(?<=[.!?])\s+', text)
     if len(sentences) <= 2:
-        # Если предложений мало, возвращаем как есть, но без лишних пробелов
         return text
 
-    # Группируем по 2 предложения
     paragraphs = []
     current = []
     for sent in sentences:
@@ -408,7 +397,6 @@ def build_post_html(title, body, emoji='📄'):
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
     if body_esc:
-        # Выделяем названия в кавычках «...» жирным после экранирования
         body_with_quotes = re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", body_esc)
         parts.append("┄┄┄ ✦ ┄┄┄")
         parts.append(body_with_quotes)
@@ -460,20 +448,22 @@ def rewrite_news(title, body):
         generated_text = response.choices[0].message.content.strip()
         cleaned = clean_think_tags(generated_text)
 
+        # Извлекаем заголовок и текст с помощью регулярных выражений
+        title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
+        body_match = re.search(r'Текст\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
+
         new_title = title
         new_body = body
 
-        for line in cleaned.split('\n'):
-            line = line.strip()
-            if line.startswith('Заголовок:'):
-                new_title = line.replace('Заголовок:', '').strip()
-            elif line.startswith('Текст:'):
-                new_body = line.replace('Текст:', '').strip()
+        if title_match:
+            new_title = title_match.group(1).strip()
+        if body_match:
+            new_body = body_match.group(1).strip()
 
         new_title = re.sub(r'<[^>]+>', '', new_title)
         new_body = re.sub(r'<[^>]+>', '', new_body)
 
-        if new_title and new_body:
+        if new_title and new_body and (new_title != title or new_body != body):
             return new_title, new_body
         else:
             print("Groq не вернул корректный результат, используем оригинал")
@@ -483,7 +473,6 @@ def rewrite_news(title, body):
         return title, body
 
 def truncate_by_paragraphs(text, max_len):
-    """Обрезает текст до max_len, сохраняя целые абзацы."""
     if len(text) <= max_len:
         return text
     paragraphs = text.split('\n\n')
@@ -494,7 +483,7 @@ def truncate_by_paragraphs(text, max_len):
             break
         result.append(p)
         current_len += len(p) + 2
-    if not result:  # если первый абзац слишком длинный, берём часть
+    if not result:
         return text[:max_len]
     return '\n\n'.join(result)
 
@@ -508,7 +497,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем рерайт через Groq
     if GROQ_API_KEY:
         print("Вызываю rewrite_news...")
         title, body = rewrite_news(title, body)
@@ -516,10 +504,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
-    # Всегда разбиваем на абзацы
     body = format_news_body(body)
 
-    # Ограничиваем длину в зависимости от наличия медиа
     if video_url or image_url:
         body = truncate_by_paragraphs(body, 800) if body else ""
     else:
@@ -527,7 +513,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     message_text = build_post_html(title, body, emoji)
 
-    # Прямое видео (mp4/webm)
     if video_url and not is_youtube:
         try:
             bot.send_video(CHANNEL_ID, video_url, caption=message_text[:1024], parse_mode='HTML')
@@ -535,7 +520,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
 
-    # YouTube: отправляем короткую ссылку с превью
     if video_url and is_youtube:
         short_url = to_short_youtube_url(video_url)
         bot.send_message(
@@ -546,7 +530,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         )
         return
 
-    # Картинка
     if image_url:
         image_file = download_image(image_url, referer=link)
         if image_file:
