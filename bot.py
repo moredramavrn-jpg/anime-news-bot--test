@@ -16,10 +16,8 @@ from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
 
-# Отключаем предупреждения о небезопасных сертификатах
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
@@ -33,7 +31,6 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Кэш токена GigaChat
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
@@ -359,44 +356,35 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
-def format_news_body(text):
+def clean_and_paragraph(text):
+    """Нормализует текст: убирает лишние переносы, схлопывает пробелы, разбивает на абзацы по 2-3 предложения."""
     if not text:
         return ""
+    # Одиночные переносы -> пробел
     text = re.sub(r'\n(?!\n)', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r' {2,}', ' ', text).strip()
-
-    unwanted_phrases = [
-        r'Читать дальше\s*→?',
-        r'Читать полностью\s*:?',
-        r'Источник\s*:',
-    ]
-    for pattern in unwanted_phrases:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-
-    if '\n\n' in text:
-        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    else:
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        if len(sentences) <= 1:
-            paragraphs = [text]
-        else:
-            paragraphs = []
+    # Множественные пробелы -> один
+    text = re.sub(r' {2,}', ' ', text)
+    # Убираем совсем пустые строки
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    # Делим на предложения
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    if len(sentences) <= 1:
+        return text
+    # Группируем по 2 предложения в абзац
+    paragraphs = []
+    current = []
+    for sent in sentences:
+        current.append(sent)
+        if len(current) == 2:
+            paragraphs.append(" ".join(current))
             current = []
-            for sent in sentences:
-                current.append(sent)
-                if len(current) == 2:
-                    paragraphs.append(" ".join(current))
-                    current = []
-            if current:
-                paragraphs.append(" ".join(current))
-
-    def bold_quotes(s):
-        return re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", s)
-
-    paragraphs = [bold_quotes(p) for p in paragraphs]
-
+    if current:
+        paragraphs.append(" ".join(current))
     return "\n\n".join(paragraphs)
+
+def format_news_body(text):
+    # Используем новую нормализацию
+    return clean_and_paragraph(text)
 
 def escape_html(text):
     return html.escape(text, quote=False)
@@ -492,9 +480,12 @@ def rewrite_news(title, body):
         print("GigaChat: не удалось получить токен")
         return title, body
 
-    body_part = body[:1200]
+    body_part = body[:1500]   # чуть больше исходного текста
 
-    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Сократи текст до 800 символов, разбей на логические абзацы. Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы внутри кавычек. Пиши на русском языке.
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия.
+Обязательно разбей текст на 2-3 логических абзаца, каждый абзац должен содержать 2-3 предложения.
+Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы.
+Пиши на русском языке.
 
 Заголовок: {title}
 
@@ -515,13 +506,13 @@ def rewrite_news(title, body):
                 "User-Agent": "AnimeNewsBot/1.0"
             },
             json={
-                "model": "GigaChat-3-Ultra",   # <-- Используем Ultra
+                "model": "GigaChat-3-Ultra",
                 "messages": [
                     {"role": "system", "content": "Ты — редактор аниме-новостей."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 600
+                "max_tokens": 800
             },
             timeout=30,
             verify=False
@@ -539,7 +530,8 @@ def rewrite_news(title, body):
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
 
-        new_body = simple_truncate_by_sentences(new_body, 800)
+        # Нормализуем и разбиваем на абзацы
+        new_body = clean_and_paragraph(new_body)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -570,7 +562,22 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     if available_for_body < 50:
         return full[:max_len]
 
-    truncated_body = simple_truncate_by_sentences(body, available_for_body)
+    # Уже разбитый на абзацы текст обрезаем по предложениям, сохраняя абзацы
+    body_paragraphs = body.split('\n\n')
+    result_body = []
+    current_len = 0
+    for para in body_paragraphs:
+        if current_len + len(para) + 2 <= available_for_body:
+            result_body.append(para)
+            current_len += len(para) + 2
+        else:
+            # обрезаем последний абзац по предложениям
+            truncated = simple_truncate_by_sentences(para, available_for_body - current_len)
+            if truncated:
+                result_body.append(truncated)
+            break
+    truncated_body = '\n\n'.join(result_body)
+
     return f"{title_part}\n{separator}\n{truncated_body}\n\n{tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
