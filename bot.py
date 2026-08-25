@@ -25,7 +25,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 groq_client = Groq(api_key=GROQ_API_KEY)
-GROQ_MODEL = "qwen/qwen3.6-27b"   # можно заменить на "llama-3.3-70b-versatile"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -337,6 +337,16 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
+def clean_think_tags(text):
+    """Удаляет всё, что находится до последнего </think>."""
+    end_idx = text.rfind('</think>')
+    if end_idx != -1:
+        return text[end_idx + len('</think>'):].strip()
+    start_idx = text.find('<think>')
+    if start_idx != -1:
+        return text[start_idx + len('<think>'):].strip()
+    return text.strip()
+
 def format_news_body(text):
     if not text:
         return ""
@@ -369,11 +379,6 @@ def format_news_body(text):
             if current:
                 paragraphs.append(" ".join(current))
 
-    def bold_quotes(s):
-        return re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", s)
-
-    paragraphs = [bold_quotes(p) for p in paragraphs]
-
     return "\n\n".join(paragraphs)
 
 def escape_html(text):
@@ -401,13 +406,15 @@ def extract_title_hashtag(title):
 
 def build_post_html(title, body, emoji='📄'):
     title_esc = escape_html(title)
-    body_formatted = format_news_body(body) if body else ""
+    body_esc = escape_html(body) if body else ""
 
     parts = [f"{emoji} <b>{title_esc}</b>"]
 
-    if body_formatted:
+    if body_esc:
         parts.append("┄┄┄ ✦ ┄┄┄")
-        parts.append(body_formatted)
+        # Выделяем названия в кавычках «...» жирным (после экранирования)
+        body_with_quotes = re.sub(r'«[^»]+»', lambda m: f"<b>{m.group(0)}</b>", body_esc)
+        parts.append(body_with_quotes)
 
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
@@ -430,9 +437,8 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq (с отладкой) ----------
+# ---------- Рерайт через Groq ----------
 def rewrite_news(title, body):
-    print(f"Пытаюсь переписать через Groq: {title}")
     try:
         prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке.
 
@@ -454,17 +460,21 @@ def rewrite_news(title, body):
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
-        print(f"Ответ Groq (первые 200 символов): {generated_text[:200]}")
+        cleaned = clean_think_tags(generated_text)
 
         new_title = title
         new_body = body
 
-        for line in generated_text.split('\n'):
+        for line in cleaned.split('\n'):
             line = line.strip()
             if line.startswith('Заголовок:'):
                 new_title = line.replace('Заголовок:', '').strip()
             elif line.startswith('Текст:'):
                 new_body = line.replace('Текст:', '').strip()
+
+        # Убираем возможные HTML-теги из результата Groq
+        new_title = re.sub(r'<[^>]+>', '', new_title)
+        new_body = re.sub(r'<[^>]+>', '', new_body)
 
         if new_title and new_body:
             return new_title, new_body
