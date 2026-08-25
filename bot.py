@@ -16,10 +16,8 @@ from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
 from telebot import types
 
-# Отключаем предупреждения о небезопасных сертификатах
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
@@ -33,7 +31,6 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Кэш токена GigaChat
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
@@ -425,7 +422,7 @@ def build_post_html(title, body, emoji='📄'):
     title_esc = escape_html(title)
     body_formatted = format_news_body(body) if body else ""
 
-    parts = [f"{emoji} <b>{title_esc}</b>"]
+    parts = [f"{emoji} <b>{title_esc}</b>"] if title_esc else [f"{emoji}"]
 
     if body_formatted:
         parts.append("┄┄┄ ✦ ┄┄┄")
@@ -492,10 +489,9 @@ def rewrite_news(title, body):
         print("GigaChat: не удалось получить токен")
         return title, body
 
-    # Передаём до 3000 символов текста (увеличено с 1500)
-    body_part = body[:3000]
+    body_part = body[:4000]   # передаём до 4000 символов
 
-    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Постарайся сохранить объём исходного текста. Избегай дословного копирования. Пиши на русском языке.
+    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Постарайся сохранить объём исходного текста и разбей текст на логические абзацы. Избегай дословного копирования. Пиши на русском языке.
 
 Заголовок: {title}
 
@@ -522,7 +518,7 @@ def rewrite_news(title, body):
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 1500   # увеличено с 800
+                "max_tokens": 2000   # увеличено
             },
             timeout=30,
             verify=False
@@ -560,50 +556,59 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
+    # Рерайт
     title, body = rewrite_news(title, body)
 
+    # Если есть медиа, отправляем его с короткой подписью (только заголовок и хэштеги),
+    # а затем полный текст отдельным сообщением.
     if video_url or image_url:
-        body = simple_truncate_by_sentences(body, 800) if body else ""
+        # Короткая подпись для медиа
+        caption = build_post_html(title, "", emoji)
+        # Полный текст (без заголовка, чтобы не дублировать)
+        body_only = format_news_body(body)
+        hashtags = ["#аниме", "#новости"]
+        title_tag = extract_title_hashtag(title)
+        if title_tag and title_tag not in hashtags:
+            hashtags.append(title_tag)
+        full_text_message = f"{body_only}\n\n🏷️ {' '.join(hashtags)}" if body_only else ""
+
+        # Отправляем медиа
+        if video_url and not is_youtube:
+            try:
+                bot.send_video(CHANNEL_ID, video_url, caption=caption, parse_mode='HTML')
+            except Exception as e:
+                print(f"Не удалось отправить видео: {e}")
+        elif video_url and is_youtube:
+            # Если YouTube, пробуем скачать, но можно и ссылкой
+            video_file = download_youtube_video(video_url)
+            if video_file:
+                try:
+                    bot.send_video(CHANNEL_ID, video_file, caption=caption, parse_mode='HTML')
+                except:
+                    pass
+            else:
+                short_url = to_short_youtube_url(video_url)
+                bot.send_message(
+                    CHANNEL_ID,
+                    caption + f"\n\nСмотреть: {short_url}",
+                    parse_mode='HTML',
+                    disable_web_page_preview=False
+                )
+        elif image_url:
+            image_file = download_image(image_url, referer=link)
+            if image_file:
+                try:
+                    bot.send_photo(CHANNEL_ID, image_file, caption=caption, parse_mode='HTML')
+                except Exception as e:
+                    print(f"Не удалось отправить фото: {e}")
+
+        # Отправляем полный текст отдельным сообщением (если есть)
+        if full_text_message:
+            bot.send_message(CHANNEL_ID, full_text_message, parse_mode='HTML', disable_web_page_preview=True)
     else:
-        body = simple_truncate_by_sentences(body, 3000) if body else ""
-
-    message_text = build_post_html(title, body, emoji)
-
-    if video_url and not is_youtube:
-        try:
-            bot.send_video(CHANNEL_ID, video_url, caption=message_text[:1024], parse_mode='HTML')
-            return
-        except Exception as e:
-            print(f"Не удалось отправить видео: {e}")
-
-    if video_url and is_youtube:
-        video_file = download_youtube_video(video_url)
-        if video_file:
-            try:
-                bot.send_video(CHANNEL_ID, video_file, caption=message_text[:1024], parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить скачанное видео: {e}")
-
-        short_url = to_short_youtube_url(video_url)
-        bot.send_message(
-            CHANNEL_ID,
-            message_text + f"\n\nСмотреть: {short_url}",
-            parse_mode='HTML',
-            disable_web_page_preview=False
-        )
-        return
-
-    if image_url:
-        image_file = download_image(image_url, referer=link)
-        if image_file:
-            try:
-                bot.send_photo(CHANNEL_ID, image_file, caption=message_text[:1024], parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить фото: {e}")
-
-    bot.send_message(CHANNEL_ID, message_text, parse_mode='HTML', disable_web_page_preview=True)
+        # Без медиа – просто одно сообщение с полным текстом
+        full_message = build_post_html(title, body, emoji)
+        bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 def main():
     links, titles = load_posted()
