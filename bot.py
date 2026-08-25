@@ -29,7 +29,7 @@ POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# Глобальные переменные для кэширования токена GigaChat
+# Кэш токена GigaChat
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
@@ -457,10 +457,8 @@ def is_podcast_entry(entry):
 
 # ---------- GigaChat API ----------
 def get_gigachat_token():
-    """Возвращает действующий токен доступа GigaChat, используя кэш."""
     global gigachat_access_token, gigachat_token_expires_at
 
-    # Проверяем, есть ли действующий токен (с запасом 30 секунд)
     if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
         return gigachat_access_token
 
@@ -477,17 +475,10 @@ def get_gigachat_token():
         r.raise_for_status()
         token_data = r.json()
         gigachat_access_token = token_data.get("access_token")
-        # Время истечения указано в миллисекундах (или секундах?) — в документации пример в миллисекундах.
-        # Для надёжности получаем expires_at как есть, но если оно в миллисекундах, переводим в секунды.
         expires_at = token_data.get("expires_at")
         if expires_at:
-            # Проверяем, похоже ли на миллисекунды ( > 10^12 )
-            if expires_at > 10**12:
-                gigachat_token_expires_at = expires_at / 1000
-            else:
-                gigachat_token_expires_at = expires_at
+            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
         else:
-            # Если нет поля, устанавливаем 30 минут
             gigachat_token_expires_at = time.time() + 1800
         return gigachat_access_token
     except Exception as e:
@@ -496,7 +487,7 @@ def get_gigachat_token():
 
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
-        print("GigaChat: нет ключа авторизации, рерайт не выполняется")
+        print("GigaChat: нет ключа авторизации")
         return title, body
 
     token = get_gigachat_token()
@@ -525,7 +516,7 @@ def rewrite_news(title, body):
                 "User-Agent": "AnimeNewsBot/1.0"
             },
             json={
-                "model": "GigaChat",
+                "model": "GigaChat-2-Pro",   # <-- правильная модель для рерайта
                 "messages": [
                     {"role": "system", "content": "Ты — редактор аниме-новостей."},
                     {"role": "user", "content": prompt}
@@ -568,7 +559,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Рерайт через GigaChat
     title, body = rewrite_news(title, body)
 
     if video_url or image_url:
