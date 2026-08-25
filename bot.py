@@ -374,14 +374,11 @@ def fix_quotes(text):
 def clean_and_paragraph(text):
     if not text:
         return ""
-    # Все переносы строк -> пробел
     text = re.sub(r'\s*\n\s*', ' ', text)
     text = re.sub(r' {2,}', ' ', text).strip()
-    # Разбиваем на предложения
     sentences = re.split(r'(?<=[.!?])\s+', text)
     if len(sentences) <= 1:
         return text
-    # Группируем по 2 предложения
     paragraphs = []
     current = []
     for sent in sentences:
@@ -393,22 +390,10 @@ def clean_and_paragraph(text):
         paragraphs.append(" ".join(current))
     return "\n\n".join(paragraphs)
 
-def alternate_blockquote(text):
-    """Чередует обычные абзацы и цитаты: первый обычный, второй цитата и т.д."""
-    paragraphs = text.split('\n\n')
-    formatted = []
-    for i, para in enumerate(paragraphs):
-        if i % 2 == 1:  # каждый второй абзац – цитата
-            formatted.append(f"<blockquote>{para}</blockquote>")
-        else:
-            formatted.append(para)
-    return "\n\n".join(formatted)
-
 def format_news_body(text):
-    """Полная обработка: нормализация, кавычки, абзацы, цитаты."""
     text = clean_and_paragraph(text)
     text = fix_quotes(text)
-    return alternate_blockquote(text)
+    return text
 
 def escape_html(text):
     return html.escape(text, quote=False)
@@ -504,10 +489,11 @@ def rewrite_news(title, body):
         print("GigaChat: не удалось получить токен")
         return title, body
 
-    body_part = body[:1500]
+    body_part = body[:3000]
 
     prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия.
-Обязательно разбей текст на логические абзацы, каждый абзац должен содержать ровно 2 предложения.
+Постарайся сохранить объём примерно 1500 символов. Не упускай важные детали.
+Разбей текст на логические абзацы, каждый абзац должен содержать ровно 2 предложения.
 Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы.
 Пиши на русском языке.
 
@@ -536,7 +522,7 @@ def rewrite_news(title, body):
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 800
+                "max_tokens": 1200
             },
             timeout=30,
             verify=False
