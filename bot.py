@@ -14,6 +14,7 @@ from telebot import types
 # ===== НАСТРОЙКИ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
@@ -23,46 +24,6 @@ RSS_URLS = [
 POSTED_FILE = "posted.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-# ---------- Словарь синонимов ----------
-SYNONYMS = {
-    'анонсировал': 'объявил',
-    'анонсировала': 'объявила',
-    'анонсировали': 'объявили',
-    'вышел': 'появился',
-    'вышла': 'появилась',
-    'вышли': 'появились',
-    'новый': 'свежий',
-    'новая': 'свежая',
-    'новое': 'свежее',
-    'трейлер': 'ролик',
-    'сезон': 'сезон',
-    'получил': 'заполучил',
-    'получила': 'заполучила',
-    'получили': 'заполучили',
-    'создатели': 'авторы',
-    'показали': 'представили',
-    'стало известно': 'появилась информация',
-    'дата выхода': 'премьера',
-    'студия': 'компания',
-    'аниме': 'аниме-сериал',
-    'фильм': 'полнометражная лента',
-    'выпустили': 'опубликовали',
-    'представили': 'показали',
-    'выйдет': 'появится',
-    'второй': '2-й',
-    'первый': '1-й',
-    'новинка': 'премьера',
-}
-
-def simple_synonymize(text):
-    """Заменяет слова и фразы на синонимы без использования внешних API."""
-    if not text:
-        return text
-    # Сортируем ключи по длине (сначала длинные фразы), чтобы не было частичных замен
-    for phrase in sorted(SYNONYMS.keys(), key=len, reverse=True):
-        text = re.sub(re.escape(phrase), SYNONYMS[phrase], text, flags=re.IGNORECASE)
-    return text
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -488,6 +449,52 @@ def is_podcast_entry(entry):
         return True
     return False
 
+# ---------- Рерайт через OpenRouter (Laguna S 2.1 free) ----------
+def rewrite_news(title, body):
+    print("Попытка рерайта через OpenRouter с Laguna S 2.1 (free)")
+    try:
+        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        prompt = f"""Ты — креативный редактор аниме-новостей. Полностью перепиши новость, чтобы она звучала уникально, но сохрани все ключевые факты, имена, названия и даты. Измени структуру предложений, используй синонимы, не копируй исходные формулировки. Пиши на русском языке.
+
+Исходный заголовок: {title}
+
+Исходный текст: {body[:1500]}
+
+Выведи результат строго в формате:
+Заголовок: <новый заголовок>
+Текст: <новый текст>
+"""
+        payload = {
+            "model": "poolside/laguna-s-2.1:free",   # <-- точное название модели
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.9,
+            "top_p": 0.9,
+            "max_tokens": 2048
+        }
+        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        generated_text = result["choices"][0]["message"]["content"].strip()
+        print(f"Ответ Laguna: {generated_text}")
+
+        new_title = title
+        new_body = body
+        for line in generated_text.split('\n'):
+            line = line.strip()
+            if line.startswith('Заголовок:'):
+                new_title = line.replace('Заголовок:', '').strip()
+            elif line.startswith('Текст:'):
+                new_body = line.replace('Текст:', '').strip()
+
+        return new_title, new_body
+    except Exception as e:
+        print(f"Ошибка рерайта: {e}")
+        return title, body
+
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
         emoji = '🎬'
@@ -498,9 +505,9 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Применяем синонимизацию вместо ИИ
-    title = simple_synonymize(title)
-    body = simple_synonymize(body)
+    # Применяем рерайт через OpenRouter
+    if OPENROUTER_API_KEY:
+        title, body = rewrite_news(title, body)
 
     if video_url or image_url:
         body = simple_truncate_by_sentences(body, 800) if body else ""
