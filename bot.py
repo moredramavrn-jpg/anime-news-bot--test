@@ -470,10 +470,10 @@ def rewrite_news(title, body):
 Текст: <новый текст>
 """
         payload = {
-            "model": "open-mistral-7b",
+            "model": "mistral-large-latest",   # <-- модель заменена
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 1.0,
-            "top_p": 1.0,
+            "temperature": 0.9,
+            "top_p": 0.9,
             "max_tokens": 2048
         }
 
