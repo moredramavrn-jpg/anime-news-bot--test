@@ -356,20 +356,6 @@ def simple_truncate_by_sentences(text, max_len):
         return text[:max_len]
     return result
 
-def truncate_by_words(text, max_len):
-    """Обрезает текст по словам, не разрывая слова."""
-    if len(text) <= max_len:
-        return text
-    words = text.split()
-    result = []
-    current_len = 0
-    for w in words:
-        if current_len + len(w) + 1 > max_len:
-            break
-        result.append(w)
-        current_len += len(w) + 1
-    return ' '.join(result)
-
 def fix_quotes(text):
     result = []
     open_quote = False
@@ -393,11 +379,9 @@ def clean_and_paragraph(text):
     sentences = re.split(r'(?<=[.!?])\s+', text)
     if len(sentences) <= 1:
         return text
-
     paragraphs = []
     current = []
     LONG_SENTENCE_THRESHOLD = 120
-
     for sent in sentences:
         if len(sent) >= LONG_SENTENCE_THRESHOLD:
             if current:
@@ -409,10 +393,8 @@ def clean_and_paragraph(text):
             if len(current) == 2:
                 paragraphs.append(" ".join(current))
                 current = []
-
     if current:
         paragraphs.append(" ".join(current))
-
     return "\n\n".join(paragraphs)
 
 def format_news_body(text):
@@ -566,7 +548,8 @@ def rewrite_news(title, body):
                 new_body = line.replace('Текст:', '').strip()
 
         new_title = fix_quotes(new_title)
-        new_body = clean_and_paragraph(new_body)
+        # Не разбиваем на абзацы здесь, это сделает build_post_html
+        # new_body = clean_and_paragraph(new_body)  # убрали
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -583,8 +566,53 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     if len(full) <= max_len:
         return full
 
-    # Используем функцию truncate_by_words для гарантированного обрезания по словам
-    return truncate_by_words(full, max_len)
+    # Строим подпись с сохранением абзацев
+    hashtags = ["#аниме", "#новости"]
+    title_tag = extract_title_hashtag(title)
+    if title_tag and title_tag not in hashtags:
+        hashtags.append(title_tag)
+    tags_str = "🏷️ " + " ".join(hashtags)
+
+    title_part = f"{emoji} <b>{escape_html(title)}</b>"
+    separator = "┄┄┄ ✦ ┄┄┄"
+    tail = f"{separator}\n{tags_str}"
+
+    available_for_body = max_len - len(title_part) - len(tail) - 5
+    if available_for_body < 50:
+        return truncate_by_words(full, max_len)  # fallback
+
+    # body уже содержит абзацы? Проверим
+    body_formatted = format_news_body(body)
+    body_paragraphs = body_formatted.split('\n\n')
+
+    result_paragraphs = []
+    current_len = 0
+    for para in body_paragraphs:
+        if current_len + len(para) + 2 <= available_for_body:
+            result_paragraphs.append(para)
+            current_len += len(para) + 2
+        else:
+            # Обрезаем последний абзац по предложениям, чтобы влезть
+            truncated = simple_truncate_by_sentences(para, available_for_body - current_len)
+            if truncated:
+                result_paragraphs.append(truncated)
+            break
+    truncated_body = '\n\n'.join(result_paragraphs)
+
+    return f"{title_part}\n{separator}\n{truncated_body}\n\n{tags_str}"
+
+def truncate_by_words(text, max_len):
+    if len(text) <= max_len:
+        return text
+    words = text.split()
+    result = []
+    current_len = 0
+    for w in words:
+        if current_len + len(w) + 1 > max_len:
+            break
+        result.append(w)
+        current_len += len(w) + 1
+    return ' '.join(result)
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
