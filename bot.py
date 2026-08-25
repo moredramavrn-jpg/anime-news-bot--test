@@ -333,6 +333,14 @@ def clean_think_tags(text):
         return text[start_idx + len('<think>'):].strip()
     return text.strip()
 
+def clean_generated_text(text):
+    text = clean_think_tags(text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'^(Заголовок|Текст)\s*[:：]\s*', '', text, flags=re.IGNORECASE)
+    text = text.strip('"\'')
+    text = text.strip()
+    return text
+
 def format_news_body(text):
     if not text:
         return ""
@@ -422,11 +430,11 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- Рерайт через Groq ----------
-def rewrite_news(title, body):
-    print(f"Пытаюсь переписать через Groq: {title}")
+# ---------- Рерайт через Groq (с кратким пересказом) ----------
+def rewrite_news(title, body, target_len=800):
+    print(f"Пытаюсь переписать через Groq: {title} (целевая длина: {target_len})")
     try:
-        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия. Избегай дословного копирования. Пиши на русском языке, используй только русские буквы. Сохрани структуру абзацев, разделяя их двойным переносом строки.
+        prompt = f"""Ты — редактор аниме-новостей. Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными и краткими. Сократи текст до {target_len} символов, сохранив все ключевые факты и имена. Пиши на русском языке, используй только русские буквы. Разделяй абзацы двойным переносом строки.
 
 Заголовок: {title}
 
@@ -439,16 +447,15 @@ def rewrite_news(title, body):
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=[
-                {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла."},
+                {"role": "system", "content": "Ты — опытный копирайтер, который умеет перефразировать новости без потери смысла и делать их краткими."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
             max_tokens=800
         )
         generated_text = response.choices[0].message.content.strip()
-        cleaned = clean_think_tags(generated_text)
+        cleaned = clean_generated_text(generated_text)
 
-        # Извлекаем заголовок и текст с помощью регулярных выражений
         title_match = re.search(r'Заголовок\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
         body_match = re.search(r'Текст\s*[:：]\s*(.*?)(?:\n|$)', cleaned, re.IGNORECASE)
 
@@ -456,12 +463,9 @@ def rewrite_news(title, body):
         new_body = body
 
         if title_match:
-            new_title = title_match.group(1).strip()
+            new_title = clean_generated_text(title_match.group(1))
         if body_match:
-            new_body = body_match.group(1).strip()
-
-        new_title = re.sub(r'<[^>]+>', '', new_title)
-        new_body = re.sub(r'<[^>]+>', '', new_body)
+            new_body = clean_generated_text(body_match.group(1))
 
         if new_title and new_body and (new_title != title or new_body != body):
             return new_title, new_body
@@ -490,26 +494,29 @@ def truncate_by_paragraphs(text, max_len):
 def send_post(title, body, link, image_url, video_url, is_youtube):
     if video_url and is_youtube:
         emoji = '🎬'
+        target_len = 800
     elif video_url and not is_youtube:
         emoji = '🎞️'
+        target_len = 800
     elif image_url:
         emoji = '🖼️'
+        target_len = 800
     else:
         emoji = '📄'
+        target_len = 1500
 
     if GROQ_API_KEY:
         print("Вызываю rewrite_news...")
-        title, body = rewrite_news(title, body)
+        title, body = rewrite_news(title, body, target_len=target_len)
         print("Рерайт завершён")
     else:
         print("GROQ_API_KEY не задан, пропускаю рерайт")
 
     body = format_news_body(body)
 
-    if video_url or image_url:
-        body = truncate_by_paragraphs(body, 800) if body else ""
-    else:
-        body = truncate_by_paragraphs(body, 3000) if body else ""
+    # После рерайта ограничиваем длину (на случай, если модель вернула длиннее)
+    if target_len:
+        body = truncate_by_paragraphs(body, target_len)
 
     message_text = build_post_html(title, body, emoji)
 
