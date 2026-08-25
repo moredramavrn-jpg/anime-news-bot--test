@@ -565,11 +565,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     # Формируем полный текст (заголовок + тело + хэштеги)
     full_message = build_post_html(title, body, emoji)
 
-    # Если есть медиа, обрезаем подпись до 1024 символов, иначе отправляем как есть
-    if video_url or image_url:
-        caption = full_message[:1024]
-    else:
-        caption = None
+    # Если есть медиа, обрезаем подпись до 1024 символов
+    caption = full_message[:1024] if (video_url or image_url) else None
 
     # Отправка
     if video_url and not is_youtube:
