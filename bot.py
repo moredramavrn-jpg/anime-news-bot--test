@@ -379,15 +379,29 @@ def clean_and_paragraph(text):
     sentences = re.split(r'(?<=[.!?])\s+', text)
     if len(sentences) <= 1:
         return text
+
     paragraphs = []
     current = []
+
+    # Порог "длинного" предложения – 120 символов
+    LONG_SENTENCE_THRESHOLD = 120
+
     for sent in sentences:
-        current.append(sent)
-        if len(current) == 2:
-            paragraphs.append(" ".join(current))
-            current = []
+        # Если предложение длинное, завершаем текущий абзац и начинаем новый
+        if len(sent) >= LONG_SENTENCE_THRESHOLD:
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            paragraphs.append(sent)
+        else:
+            current.append(sent)
+            if len(current) == 2:
+                paragraphs.append(" ".join(current))
+                current = []
+
     if current:
         paragraphs.append(" ".join(current))
+
     return "\n\n".join(paragraphs)
 
 def format_news_body(text):
