@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install feedparser pyTelegramBotAPI requests beautifulsoup4 lxml yt-dlp
+        run: pip install feedparser pyTelegramBotAPI requests beautifulsoup4 lxml yt-dlp mistralai
 
       - name: Run bot
         env:
