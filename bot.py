@@ -154,13 +154,20 @@ def extract_full_text_from_page(soup):
     return ""
 
 def fetch_full_text(entry):
-    link = entry.get('link')
+    link = entry.get('link', '')
+    # Для Shikimori используем только summary из RSS, чтобы избежать мусора
+    if 'shikimori' in link:
+        summary = entry.get('summary', '') or entry.get('description', '')
+        if summary:
+            return clean_html(summary)
+        return ""  # если summary пусто, не идём на страницу
+
+    # Для остальных источников оставляем текущую логику
     if link:
         soup = get_page_soup(link)
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
-                # Ограничиваем длину, чтобы не тащить лишний мусор
                 return full_text[:2000]
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
@@ -748,7 +755,7 @@ def main():
                 continue
 
             soup = get_page_soup(link) if link else None
-            full_text = extract_full_text_from_page(soup) if soup else fetch_full_text(entry)
+            full_text = fetch_full_text(entry)
             image_url = fetch_image_url(entry, soup)
             video_url, is_youtube = fetch_video_info(entry, soup)
 
