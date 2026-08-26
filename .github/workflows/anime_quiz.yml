@@ -1,15 +1,15 @@
-name: Anime Riddle Poll
+name: Anime Quiz
 
 on:
   schedule:
     - cron: '0 12 * * *'   # каждый день в 12:00 UTC (можно изменить)
-  workflow_dispatch:        # позволяет запускать вручную
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  riddle:
+  quiz:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,9 +21,9 @@ jobs:
       - name: Install dependencies
         run: pip install requests pyTelegramBotAPI
 
-      - name: Run anime_riddle.py
+      - name: Run anime_quiz.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           GIGACHAT_AUTHORIZATION_KEY: ${{ secrets.GIGACHAT_AUTHORIZATION_KEY }}
-        run: python anime_riddle.py
+        run: python anime_quiz.py
