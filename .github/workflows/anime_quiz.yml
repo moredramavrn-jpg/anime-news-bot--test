@@ -2,7 +2,7 @@ name: Anime Quiz
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # каждый день в 12:00 UTC (можно изменить)
+    - cron: '0 15 */2 * *'   # каждый второй день в 15:00 UTC
   workflow_dispatch:
 
 permissions:
