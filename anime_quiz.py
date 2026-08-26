@@ -12,7 +12,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
-POPULAR_ANIME_FILE = "popular_anime.txt"   # <-- теперь используется популярный список
+POPULAR_ANIME_FILE = "popular_anime.txt"   # файл с топ-100 популярных аниме
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -61,12 +61,12 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeRiddlePollBot/1.0"
+        "User-Agent": "AnimeQuizBot/1.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
         "messages": [
-            {"role": "system", "content": "Ты — автор загадок про аниме."},
+            {"role": "system", "content": "Ты — ведущий викторины по аниме."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.8,
@@ -87,35 +87,43 @@ def giga_request(prompt, token, max_tokens=300):
         print(f"Ошибка GigaChat: {e}")
         return ""
 
-def generate_riddle(anime_name, token):
+def generate_question(anime_name, token):
+    """
+    Просит GigaChat сформулировать вопрос для викторины.
+    """
     prompt = (
-        f"Придумай загадку-описание аниме «{anime_name}» длиной не более 200 символов. "
-        "Опиши сюжет или персонажей, но не называй само аниме. "
-        "Загадка должна давать подсказки. Выведи только текст загадки."
+        f"Составь вопрос для викторины об аниме «{anime_name}». "
+        "Вопрос должен описывать сюжет, персонажей или ключевые детали, "
+        "но не называть само аниме. Начни вопрос с фразы: 'Какое аниме описывается так: ...'\n"
+        "Выведи только текст вопроса (без вступления и ответа)."
     )
-    riddle = giga_request(prompt, token, max_tokens=200)
-    if len(riddle) > 250:
-        riddle = riddle[:250].rsplit(' ', 1)[0] + '…'
-    return riddle
+    question = giga_request(prompt, token, max_tokens=200)
+    # Обрезаем, если длиннее 250 символов
+    if len(question) > 250:
+        question = question[:250].rsplit(' ', 1)[0] + '…'
+    return question
 
-def send_riddle_poll(riddle_text, options, correct_index):
-    header = "🧩 Аниме-загадка"
-    question = f"{header}\n{riddle_text}"
-    if len(question) > 300:
-        max_riddle_len = 300 - len(header) - 1
-        riddle_text = riddle_text[:max_riddle_len].rsplit(' ', 1)[0] + '…'
-        question = f"{header}\n{riddle_text}"
+def send_quiz_poll(question_text, options, correct_index):
+    header = "🎌 <b>Аниме-викторина</b>\n"
+    full_question = f"{header}{question_text}"
+    # Telegram допускает не более 300 символов в вопросе
+    if len(full_question) > 300:
+        # Обрезаем вопрос, оставляя место для заголовка
+        max_q_len = 300 - len(header)
+        question_text = question_text[:max_q_len].rsplit(' ', 1)[0] + '…'
+        full_question = f"{header}{question_text}"
+
     try:
         bot.send_poll(
             chat_id=CHANNEL_ID,
-            question=question,
+            question=full_question,
             options=options,
             type="quiz",
             correct_option_id=correct_index,
             open_period=10800,          # 3 часа
             is_anonymous=True           # обязательно для каналов
         )
-        print("Загадка-опрос опубликована.")
+        print("Викторина опубликована.")
     except Exception as e:
         print(f"Ошибка отправки опроса: {e}")
 
@@ -130,6 +138,7 @@ def main():
         print("Не удалось получить токен GigaChat")
         return
 
+    # Выбираем правильный ответ и три случайных неправильных
     correct_anime = random.choice(all_anime)
     wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
     if len(wrong_pool) < 3:
@@ -137,16 +146,19 @@ def main():
         return
     wrong_answers = random.sample(wrong_pool, 3)
 
-    riddle_text = generate_riddle(correct_anime, token)
-    if not riddle_text:
-        print("Не удалось сгенерировать загадку")
+    # Генерируем вопрос
+    question = generate_question(correct_anime, token)
+    if not question:
+        print("Не удалось сгенерировать вопрос")
         return
 
+    # Перемешиваем варианты и определяем правильный индекс
     options = [correct_anime] + wrong_answers
     random.shuffle(options)
     correct_index = options.index(correct_anime)
 
-    send_riddle_poll(riddle_text, options, correct_index)
+    # Отправляем опрос
+    send_quiz_poll(question, options, correct_index)
 
 if __name__ == "__main__":
     main()
