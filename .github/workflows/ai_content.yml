@@ -2,7 +2,7 @@ name: AI Content Generator
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # каждый день в 12:00 UTC
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:
@@ -27,3 +27,15 @@ jobs:
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
           GIGACHAT_AUTHORIZATION_KEY: ${{ secrets.GIGACHAT_AUTHORIZATION_KEY }}
         run: python ai_content.py
+
+      - name: Commit used_anime.txt if changed
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add used_anime.txt
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update used_anime.txt"
+            git push
+          fi
