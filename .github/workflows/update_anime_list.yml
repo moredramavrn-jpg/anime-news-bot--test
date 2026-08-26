@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # важно для git pull --rebase
 
       - uses: actions/setup-python@v5
         with:
@@ -33,5 +35,6 @@ jobs:
             echo "No changes"
           else
             git commit -m "Update top_anime.txt"
-            git push
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
           fi
