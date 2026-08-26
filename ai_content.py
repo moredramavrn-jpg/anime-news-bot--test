@@ -1,6 +1,5 @@
 import os
 import re
-import html
 import uuid
 import time
 import random
@@ -22,14 +21,7 @@ gigachat_token_expires_at = 0
 TOP_ANIME_FILE = "top_anime.txt"
 USED_ANIME_FILE = "used_anime.txt"
 
-# Эмодзи для пунктов (нужно минимум 3, но оставим 5)
 ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
-
-# Стоп-слова, указывающие на спецвыпуски, фильмы и т.п.
-BAD_SUBSTRINGS = [
-    "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
-    "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная"
-]
 
 def get_gigachat_token():
     global gigachat_access_token, gigachat_token_expires_at
@@ -60,49 +52,29 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
-def clean_anime_title(title):
-    """
-    Возвращает базовое название аниме, отбрасывая подзаголовки.
-    Пример: 'Вольный стиль! Вечное лето — Спецвыпуск' -> 'Вольный стиль! Вечное лето'
-    Если строка сама является только спецвыпуском, вернёт пустую строку.
-    """
-    for sep in [':', '—', ' - ', ' – ']:
-        if sep in title:
-            title = title.split(sep)[0].strip()
-            break
-
-    if len(title) < 2:
-        return ""
-
-    lower_title = title.lower()
-    for bad in BAD_SUBSTRINGS:
-        if bad in lower_title:
-            return ""
-
-    return title.strip()
-
 def load_top_anime():
+    """
+    Читает top_anime.txt в формате: Название|Жанры|Количество серий
+    Возвращает список словарей: {'name': str, 'genres': str, 'episodes': str}
+    """
     if not os.path.exists(TOP_ANIME_FILE):
         print(f"Файл {TOP_ANIME_FILE} не найден")
         return []
 
-    raw_names = []
+    anime_list = []
     with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
-        raw_names = [line.strip() for line in f if line.strip()]
-
-    cleaned = []
-    seen = set()
-    for name in raw_names:
-        clean = clean_anime_title(name)
-        if not clean:
-            continue
-        key = clean.lower()
-        if key not in seen:
-            seen.add(key)
-            cleaned.append(clean)
-
-    print(f"Загружено {len(cleaned)} аниме после фильтрации.")
-    return cleaned
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split('|')
+            name = parts[0].strip()
+            if not name:
+                continue
+            genres = parts[1].strip() if len(parts) > 1 else ""
+            episodes = parts[2].strip() if len(parts) > 2 else ""
+            anime_list.append({'name': name, 'genres': genres, 'episodes': episodes})
+    return anime_list
 
 def load_used_anime():
     if not os.path.exists(USED_ANIME_FILE):
@@ -145,15 +117,27 @@ def generate_description(anime_name, token):
         response.raise_for_status()
         data = response.json()
         desc = data["choices"][0]["message"]["content"].strip()
-        # Убираем возможное название в начале
         desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
-        # Принудительно делаем первую букву строчной
         if desc:
             desc = desc[0].lower() + desc[1:]
         return desc
     except Exception as e:
         print(f"Ошибка генерации описания для '{anime_name}': {e}")
         return ""
+
+def episodes_word(episodes):
+    """Склоняет слово 'серия' в зависимости от числа."""
+    try:
+        n = int(episodes)
+    except:
+        return f"{episodes} серий"
+    if 10 <= n % 100 <= 20:
+        return f"{n} серий"
+    if n % 10 == 1:
+        return f"{n} серия"
+    if 2 <= n % 10 <= 4:
+        return f"{n} серии"
+    return f"{n} серий"
 
 def generate_recommendations():
     all_anime = load_top_anime()
@@ -163,7 +147,7 @@ def generate_recommendations():
 
     used_anime = load_used_anime()
 
-    available = [a for a in all_anime if a.lower() not in used_anime]
+    available = [a for a in all_anime if a['name'].lower() not in used_anime]
     if len(available) < 3:
         print("Недостаточно новых аниме, начинаем использовать повторы")
         available = all_anime
@@ -176,19 +160,29 @@ def generate_recommendations():
         return None
 
     cards = []
-    for idx, name in enumerate(chosen):
+    for idx, anime in enumerate(chosen):
+        name = anime['name']
         desc = generate_description(name, token)
         if not desc:
             print(f"Не удалось получить описание для '{name}'")
             return None
+
+        # Формируем дополнительную информацию в скобках
+        genres = anime['genres'] if anime['genres'] else "жанр не указан"
+        episodes = anime['episodes'] if anime['episodes'] and anime['episodes'] != '?' else "?"
+        episodes_str = episodes_word(episodes) if episodes != "?" else "кол-во серий неизвестно"
+
+        meta = f"{genres}, {episodes_str}"
+
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
-        # Формат: эмодзи «Название» — описание (с длинным тире)
-        card = f"{emoji} <b>«{name}»</b> — {desc}"
+        # Формат: эмодзи «Название» (жанр, количество серий) — описание
+        card = f"{emoji} <b>«{name}»</b> ({meta}) — {desc}"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
 
-    used_anime.update(chosen)
+    # Сохраняем использованные названия
+    used_anime.update(anime['name'].lower() for anime in chosen)
     save_used_anime(used_anime)
 
     return '\n'.join(cards)
