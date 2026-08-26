@@ -12,7 +12,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
-POPULAR_ANIME_FILE = "popular_anime.txt"   # файл с топ-100 популярных аниме
+POPULAR_ANIME_FILE = "popular_anime.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -89,28 +89,31 @@ def giga_request(prompt, token, max_tokens=300):
 
 def generate_question(anime_name, token):
     """
-    Просит GigaChat сформулировать вопрос для викторины.
+    Формулирует вопрос викторины об аниме.
     """
     prompt = (
         f"Составь вопрос для викторины об аниме «{anime_name}». "
         "Вопрос должен описывать сюжет, персонажей или ключевые детали, "
         "но не называть само аниме. Начни вопрос с фразы: 'Какое аниме описывается так: ...'\n"
-        "Выведи только текст вопроса (без вступления и ответа)."
+        "Не используй многоточие в конце вопроса. Выведи только текст вопроса."
     )
-    question = giga_request(prompt, token, max_tokens=200)
-    # Обрезаем, если длиннее 250 символов
+    question = giga_request(prompt, token, max_tokens=250)
+    # Убираем многоточие в конце, если оно есть
+    question = re.sub(r'\.{3,}$', '', question).strip()
+    # Если после обрезки осталось многоточие, тоже убираем
+    question = re.sub(r'\.{3,}$', '', question).strip()
+    # Обрезаем, если длиннее 250 символов (без добавления многоточия)
     if len(question) > 250:
-        question = question[:250].rsplit(' ', 1)[0] + '…'
+        question = question[:250].rsplit(' ', 1)[0].strip()
     return question
 
 def send_quiz_poll(question_text, options, correct_index):
-    header = "🎌 <b>Аниме-викторина</b>\n"
+    header = "🎌 <b>Аниме-викторина</b>\n\n"   # двойной перенос для пустой строки
     full_question = f"{header}{question_text}"
     # Telegram допускает не более 300 символов в вопросе
     if len(full_question) > 300:
-        # Обрезаем вопрос, оставляя место для заголовка
         max_q_len = 300 - len(header)
-        question_text = question_text[:max_q_len].rsplit(' ', 1)[0] + '…'
+        question_text = question_text[:max_q_len].rsplit(' ', 1)[0].strip()
         full_question = f"{header}{question_text}"
 
     try:
@@ -121,7 +124,8 @@ def send_quiz_poll(question_text, options, correct_index):
             type="quiz",
             correct_option_id=correct_index,
             open_period=10800,          # 3 часа
-            is_anonymous=True           # обязательно для каналов
+            is_anonymous=True,
+            parse_mode='HTML'           # чтобы заголовок был жирным
         )
         print("Викторина опубликована.")
     except Exception as e:
@@ -138,7 +142,6 @@ def main():
         print("Не удалось получить токен GigaChat")
         return
 
-    # Выбираем правильный ответ и три случайных неправильных
     correct_anime = random.choice(all_anime)
     wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
     if len(wrong_pool) < 3:
@@ -146,18 +149,15 @@ def main():
         return
     wrong_answers = random.sample(wrong_pool, 3)
 
-    # Генерируем вопрос
     question = generate_question(correct_anime, token)
     if not question:
         print("Не удалось сгенерировать вопрос")
         return
 
-    # Перемешиваем варианты и определяем правильный индекс
     options = [correct_anime] + wrong_answers
     random.shuffle(options)
     correct_index = options.index(correct_anime)
 
-    # Отправляем опрос
     send_quiz_poll(question, options, correct_index)
 
 if __name__ == "__main__":
