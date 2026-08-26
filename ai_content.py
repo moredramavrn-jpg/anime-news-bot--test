@@ -116,7 +116,6 @@ def generate_description(anime_name, token):
     if desc:
         desc = desc[0].lower() + desc[1:]
 
-    # Оставляем только первые два предложения
     sentences = re.split(r'(?<=[.!?])\s+', desc)
     if len(sentences) > 2:
         desc = ' '.join(sentences[:2]).strip()
@@ -125,10 +124,6 @@ def generate_description(anime_name, token):
     return desc
 
 def get_anime_meta(anime_name, token):
-    """
-    Запрашивает у GigaChat жанр, количество серий и статус аниме.
-    Возвращает (genres, episodes, status)
-    """
     prompt = (
         f"Назови жанр (жанры), количество серий и статус аниме «{anime_name}».\n"
         "Если жанров несколько, перечисли их через запятую.\n"
@@ -212,14 +207,13 @@ def generate_recommendations():
         status_str = status if status and status != "неизвестно" else "статус неизвестен"
 
         meta = f"{genres_str}, {episodes_str}, {status_str}"
-        meta = meta.capitalize()   # первая буква заглавная
+        meta = meta.capitalize()
 
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
 
-        # НОВЫЙ ФОРМАТ:
-        # первая строка: эмодзи «Название» — описание
-        # вторая строка: [метаданные] жирным
-        card = f"{emoji} <b>«{name}»</b> — {desc}\n<b>[{meta}]</b>"
+        # Формат: эмодзи «Название» — описание
+        # Затем цитата с метаданными
+        card = f"{emoji} <b>«{name}»</b> — {desc}\n<blockquote>[{meta}]</blockquote>"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
