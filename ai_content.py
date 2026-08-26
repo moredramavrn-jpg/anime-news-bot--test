@@ -116,11 +116,10 @@ def generate_description(anime_name, token):
     if desc:
         desc = desc[0].lower() + desc[1:]
 
-    # Оставляем только первые два предложения (если больше)
+    # Оставляем только первые два предложения
     sentences = re.split(r'(?<=[.!?])\s+', desc)
     if len(sentences) > 2:
         desc = ' '.join(sentences[:2]).strip()
-        # Убедимся, что последнее предложение заканчивается точкой
         if desc and desc[-1] not in '.!?':
             desc += '.'
     return desc
@@ -215,7 +214,10 @@ def generate_recommendations():
         meta = f"{genres_str}, {episodes_str}, {status_str}"
 
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
-        card = f"{emoji} <b>«{name}»</b> ({meta}) — {desc}"
+
+        # НОВЫЙ ФОРМАТ:
+        # эмодзи «Название» — описание [метаданные жирным]
+        card = f"{emoji} <b>«{name}»</b> — {desc} <b>[{meta}]</b>"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
