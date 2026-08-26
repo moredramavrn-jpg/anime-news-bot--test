@@ -89,9 +89,6 @@ def giga_request(prompt, token, max_tokens=300):
         return ""
 
 def generate_question(anime_name, token):
-    """
-    Формулирует вопрос викторины об аниме.
-    """
     prompt = (
         f"Составь вопрос для викторины об аниме «{anime_name}». "
         "Вопрос должен описывать сюжет, персонажей или ключевые детали, "
@@ -99,17 +96,15 @@ def generate_question(anime_name, token):
         "Не используй многоточие в конце вопроса. Выведи только текст вопроса."
     )
     question = giga_request(prompt, token, max_tokens=250)
-    # Убираем многоточие в конце, если оно есть
     question = re.sub(r'\.{3,}$', '', question).strip()
-    # Обрезаем, если длиннее 250 символов (без добавления многоточия)
     if len(question) > 250:
         question = question[:250].rsplit(' ', 1)[0].strip()
     return question
 
 def send_quiz_poll(question_text, options, correct_index):
-    header = "🎌 <b>Аниме-викторина</b>\n\n"   # двойной перенос для пустой строки
+    # Заголовок без HTML-тегов (обычный текст)
+    header = "🎌 Аниме-викторина\n\n"
     full_question = f"{header}{question_text}"
-    # Telegram допускает не более 300 символов в вопросе
     if len(full_question) > 300:
         max_q_len = 300 - len(header)
         question_text = question_text[:max_q_len].rsplit(' ', 1)[0].strip()
@@ -123,8 +118,7 @@ def send_quiz_poll(question_text, options, correct_index):
             type="quiz",
             correct_option_id=correct_index,
             open_period=10800,          # 3 часа
-            is_anonymous=True,
-            parse_mode='HTML'           # чтобы заголовок был жирным
+            is_anonymous=True           # для каналов обязательно True
         )
         print("Викторина опубликована.")
     except Exception as e:
