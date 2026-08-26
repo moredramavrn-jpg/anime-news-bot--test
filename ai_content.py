@@ -168,7 +168,7 @@ def generate_recommendations():
         print("Недостаточно новых аниме, начинаем использовать повторы")
         available = all_anime
 
-    chosen = random.sample(available, 3)  # <-- теперь 3
+    chosen = random.sample(available, 3)
 
     token = get_gigachat_token()
     if not token:
@@ -182,8 +182,8 @@ def generate_recommendations():
             print(f"Не удалось получить описание для '{name}'")
             return None
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
-        # Формат: эмодзи название — описание (с длинным тире)
-        card = f"{emoji} <b>{name}</b> — {desc}"
+        # Формат: эмодзи «Название» — описание (с длинным тире)
+        card = f"{emoji} <b>«{name}»</b> — {desc}"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
