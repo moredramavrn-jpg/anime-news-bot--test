@@ -7,10 +7,11 @@ from urllib3.util.retry import Retry
 
 TOP_ANIME_FILE = "top_anime.txt"
 
+# Стоп-слова для фильтрации нежелательных тайтлов
 BAD_SUBSTRINGS = [
     "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
     "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная",
-    "special", "movie", "season", "part", "ova", "ona", "episode", "final"
+    "special", "movie", "season", "part", "episode", "final"
 ]
 
 HEADERS = {
@@ -38,71 +39,90 @@ def requests_retry_session(
     return session
 
 def clean_title(title):
-    """Расширенная очистка названия: убирает подзаголовки, стоп-слова, числовые/римские окончания."""
+    """
+    Очищает название: убирает подзаголовки, сезоны, спецвыпуски.
+    Пример: 'Гинтама 7' -> 'Гинтама', 'Вольный стиль! Вечное лето — Спецвыпуск' -> 'Вольный стиль! Вечное лето'
+    Возвращает None, если название не подходит.
+    """
     if not title:
         return None
-    # 1. Убираем подзаголовки после двоеточия, тире и т.п.
+
+    # Убираем подзаголовки после двоеточия, длинного тире и т.п.
     for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
-    title = ' '.join(title.split())  # убираем лишние пробелы
+
+    # Убираем номер сезона/сиквела в конце (например, "Гинтама 7" -> "Гинтама")
+    title = re.sub(r'(\s|-)\d+$', '', title).strip()
+
     if len(title) < 2:
         return None
 
-    # 2. Проверяем на стоп-слова
     lower = title.lower()
     for bad in BAD_SUBSTRINGS:
         if bad in lower:
             return None
 
-    # 3. Отбрасываем, если последнее слово — число или римская цифра (типа "Гинтама 7", "Fate 3", "Naruto II")
-    words = title.split()
-    if len(words) >= 2:
-        last = words[-1].lower()
-        if re.fullmatch(r'\d+', last) or re.fullmatch(r'[ivxlcdm]+', last):
-            return None
-        if last in ["season", "cour", "part", "special", "movie", "ova", "ona", "final"]:
-            return None
-
+    # Убираем лишние пробелы
+    title = ' '.join(title.split())
     return title
 
-def fetch_shikimori_released(pages=20, limit=50):
+def fetch_shikimori_released(total_pages=20, limit=50):
+    """
+    Собирает вышедшие аниме с Shikimori.
+    Возвращает список названий.
+    """
     names = []
     session = requests_retry_session()
-    for page in range(1, pages + 1):
-        url = "https://shikimori.one/api/animes"
-        params = {
-            "status": "released",
-            "order": "ranked",
-            "limit": limit,
-            "page": page
-        }
+    url = "https://shikimori.one/api/animes"
+    params = {
+        "order": "ranked",
+        "kind": "tv,movie,ova,ona,special",  # все типы
+        "status": "released",
+        "rating": "g,pg,pg_13,r,r_plus",     # все рейтинги
+        "limit": limit,
+        "page": 1,
+    }
+
+    for page in range(1, total_pages + 1):
+        params["page"] = page
         try:
             r = session.get(url, params=params, headers=HEADERS, timeout=20)
             r.raise_for_status()
             data = r.json()
+            if not data:
+                print(f"Shikimori: страница {page} пуста, прекращаем.")
+                break
             for anime in data:
                 name = anime.get("russian") or anime.get("english") or anime.get("name")
                 name = clean_title(name)
                 if name:
                     names.append(name)
-            print(f"Shikimori: страница {page} получена, всего {len(names)} названий")
-            time.sleep(0.5)
+            print(f"Shikimori: получена страница {page} ({len(data)} записей)")
+            time.sleep(1)  # щадящая задержка
         except Exception as e:
             print(f"Ошибка Shikimori на странице {page}: {e}")
+            # Пробуем следующую страницу после ошибки
+            time.sleep(2)
+            continue
     return names
 
-def fetch_jikan_finished(pages=20, limit=25, filter_type="bypopularity"):
+def fetch_jikan_finished(pages=3, limit=25):
+    """
+    Дополнительный сбор с MyAnimeList через Jikan API.
+    Возвращает список названий только со статусом 'Finished Airing'.
+    """
     names = []
     session = requests_retry_session()
+    url = "https://api.jikan.moe/v4/top/anime"
+    params = {
+        "limit": limit,
+        "page": 1,
+        "filter": "bypopularity"
+    }
     for page in range(1, pages + 1):
-        url = "https://api.jikan.moe/v4/top/anime"
-        params = {
-            "limit": limit,
-            "page": page,
-            "filter": filter_type
-        }
+        params["page"] = page
         try:
             r = session.get(url, params=params, headers=HEADERS, timeout=20)
             r.raise_for_status()
@@ -114,14 +134,29 @@ def fetch_jikan_finished(pages=20, limit=25, filter_type="bypopularity"):
                 title = clean_title(title)
                 if title:
                     names.append(title)
-            print(f"Jikan ({filter_type}): страница {page} получена, всего {len(names)} названий")
-            time.sleep(2)
+            print(f"Jikan: получена страница {page}")
+            time.sleep(2)  # Jikan имеет жёсткие лимиты
         except Exception as e:
-            print(f"Ошибка Jikan на странице {page} ({filter_type}): {e}")
+            print(f"Ошибка Jikan на странице {page}: {e}")
+            time.sleep(3)
+            continue
     return names
 
-def save_to_file(names):
-    unique = list(dict.fromkeys(names))  # удаляем дубликаты
+def save_to_file(names, max_count=1000):
+    """
+    Сохраняет уникальные названия в файл, ограничивая количество max_count.
+    """
+    # Удаляем дубликаты, сохраняя порядок
+    unique = []
+    seen = set()
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(name)
+            if len(unique) >= max_count:
+                break
+
     with open(TOP_ANIME_FILE, 'w', encoding='utf-8') as f:
         for name in unique:
             f.write(name + '\n')
@@ -130,16 +165,18 @@ def save_to_file(names):
 def main():
     all_names = []
 
-    print("Сбор с Shikimori (released)...")
-    all_names.extend(fetch_shikimori_released(pages=20, limit=50))
+    print("=== Сбор с Shikimori ===")
+    shiki_names = fetch_shikimori_released(total_pages=20, limit=50)
+    all_names.extend(shiki_names)
+    print(f"Shikimori: всего {len(shiki_names)} названий")
 
-    print("Сбор с MyAnimeList через Jikan (bypopularity)...")
-    all_names.extend(fetch_jikan_finished(pages=20, limit=25, filter_type="bypopularity"))
+    print("\n=== Сбор с MyAnimeList (Jikan) ===")
+    jikan_names = fetch_jikan_finished(pages=3, limit=25)
+    all_names.extend(jikan_names)
+    print(f"Jikan: всего {len(jikan_names)} названий")
 
-    print("Сбор с MyAnimeList через Jikan (favorite)...")
-    all_names.extend(fetch_jikan_finished(pages=20, limit=25, filter_type="favorite"))
-
-    save_to_file(all_names)
+    print("\n=== Сохранение результата ===")
+    save_to_file(all_names, max_count=1000)
 
 if __name__ == "__main__":
     main()
