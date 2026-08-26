@@ -22,6 +22,15 @@ gigachat_token_expires_at = 0
 TOP_ANIME_FILE = "top_anime.txt"
 USED_ANIME_FILE = "used_anime.txt"
 
+# Эмодзи для пунктов
+ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
+
+# Стоп-слова, указывающие на спецвыпуски, фильмы, сиквелы и т.п.
+BAD_SUBSTRINGS = [
+    "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
+    "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная"
+]
+
 def get_gigachat_token():
     global gigachat_access_token, gigachat_token_expires_at
 
@@ -51,12 +60,37 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
+def clean_anime_title(title):
+    """Очищает название от подзаголовков и меток сиквелов/фильмов."""
+    # Разделяем по двоеточию или тире, берём только первую часть
+    for sep in [':', '—', ' - ']:
+        if sep in title:
+            title = title.split(sep)[0].strip()
+    # Удаляем остаточные слова-метки
+    for bad in BAD_SUBSTRINGS:
+        if bad in title.lower():
+            return ""
+    return title.strip()
+
 def load_top_anime():
     if not os.path.exists(TOP_ANIME_FILE):
         print(f"Файл {TOP_ANIME_FILE} не найден")
         return []
+    raw_names = []
     with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
+        raw_names = [line.strip() for line in f if line.strip()]
+
+    cleaned = []
+    seen = set()
+    for name in raw_names:
+        clean = clean_anime_title(name)
+        if not clean or len(clean) < 2:
+            continue
+        key = clean.lower()
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(clean)
+    return cleaned
 
 def load_used_anime():
     if not os.path.exists(USED_ANIME_FILE):
@@ -70,30 +104,43 @@ def save_used_anime(anime_set):
         for name in anime_list:
             f.write(name + '\n')
 
-def extract_section(text, name, next_name=None):
-    """Извлекает описание для аниме с указанным названием."""
-    # Ищем название в тексте (регистронезависимо)
-    pos = text.lower().find(name.lower())
-    if pos == -1:
+def generate_description(anime_name, token):
+    """Отдельный запрос к GigaChat для описания одного аниме."""
+    prompt = f"Опиши аниме «{anime_name}» в 2-3 предложениях на русском языке. Не добавляй название, только описание."
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeContentBot/1.0"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {"role": "system", "content": "Ты — редактор аниме-канала. Ты пишешь описания аниме."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.6,
+        "max_tokens": 300
+    }
+    try:
+        response = requests.post(
+            "https://api.giga.chat/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
+            verify=False
+        )
+        response.raise_for_status()
+        data = response.json()
+        desc = data["choices"][0]["message"]["content"].strip()
+        desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
+        if desc:
+            desc = desc[0].upper() + desc[1:]
+        return desc
+    except Exception as e:
+        print(f"Ошибка генерации описания для '{anime_name}': {e}")
         return ""
-    start = pos + len(name)
-    if next_name:
-        next_pos = text.lower().find(next_name.lower(), start)
-        if next_pos != -1:
-            section = text[start:next_pos]
-        else:
-            section = text[start:]
-    else:
-        section = text[start:]
-    # Убираем возможные тире, двоеточия и пробелы в начале
-    section = section.strip()
-    section = re.sub(r'^[—\-:]\s*', '', section)
-    # Оставляем до 2-3 предложений
-    sentences = re.split(r'(?<=[.!?])\s+', section)
-    desc = ' '.join(sentences[:3])
-    if desc:
-        desc = desc[0].upper() + desc[1:]
-    return desc
 
 def generate_recommendations():
     all_anime = load_top_anime()
@@ -109,84 +156,29 @@ def generate_recommendations():
         available = all_anime
 
     chosen = random.sample(available, 5)
-    anime_list = ", ".join(chosen)
 
     token = get_gigachat_token()
     if not token:
         print("Не удалось получить токен GigaChat")
         return None
 
-    prompt = f"""Напиши краткие описания для следующих аниме: {anime_list}.
-
-Для каждого аниме дай описание из 2-3 предложений на русском языке.
-Не используй эмодзи, номера или маркированные списки.
-Просто напиши описания подряд, разделяя их пустой строкой.
-
-Выведи результат в формате:
-Название аниме
-Описание
-
-Название аниме
-Описание
-...
-"""
-    system_msg = "Ты — редактор аниме-канала. Ты пишешь описания аниме точно по названиям из списка."
-
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                "https://api.giga.chat/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                    "X-Request-ID": str(uuid.uuid4()),
-                    "X-Session-ID": str(uuid.uuid4()),
-                    "User-Agent": "AnimeContentBot/1.0"
-                },
-                json={
-                    "model": "GigaChat-3-Ultra",
-                    "messages": [
-                        {"role": "system", "content": system_msg},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.6,
-                    "max_tokens": 1200
-                },
-                timeout=30,
-                verify=False
-            )
-            response.raise_for_status()
-            data = response.json()
-            generated_text = data["choices"][0]["message"]["content"].strip()
-
-            print("=== GigaChat Response ===")
-            print(generated_text)
-            print("=========================")
-
-            # Строим карточки на основе chosen
-            cards = []
-            for idx, name in enumerate(chosen):
-                next_name = chosen[idx+1] if idx+1 < len(chosen) else None
-                desc = extract_section(generated_text, name, next_name)
-                if not desc:
-                    print(f"Не найдено описание для '{name}', пробуем ещё раз")
-                    break
-                card = f"<b>{name}</b>\n{desc}"
-                if idx < len(chosen) - 1:
-                    card += "\n────────────────"
-                cards.append(card)
-            else:
-                # Все 5 описаний найдены
-                used_anime.update(chosen)
-                save_used_anime(used_anime)
-                return '\n'.join(cards)
-
-        except Exception as e:
-            print(f"Ошибка генерации: {e}")
+    cards = []
+    for idx, name in enumerate(chosen):
+        desc = generate_description(name, token)
+        if not desc:
+            print(f"Не удалось получить описание для '{name}'")
             return None
+        emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
+        card = f"{emoji} <b>{name}</b>\n{desc}"
+        if idx < len(chosen) - 1:
+            card += "\n────────────────"
+        cards.append(card)
 
-    print("Не удалось получить все описания")
-    return None
+    # Сохраняем использованные аниме
+    used_anime.update(chosen)
+    save_used_anime(used_anime)
+
+    return '\n'.join(cards)
 
 def send_recommendation_post(cards):
     header = "✨ <b>Рубрика: аниме, которые стоит посмотреть</b>"
