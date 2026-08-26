@@ -110,10 +110,32 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
+    # Удаляем блоки комментариев, футер, хедер и прочий мусор
+    for bad_selector in [
+        'div.b-comments', 'div.comments', 'div.b-comment', 'div.comment',
+        'div.b-toolbar', 'div.toolbar', 'footer', 'header',
+        'div.b-comments__content', 'div.comments__content'
+    ]:
+        for elem in soup.select(bad_selector):
+            elem.decompose()
+
     main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
         main_content = soup.select_one('div.news_text')  # КГ-Портал
 
+    # Специфические селекторы для Shikimori
+    shikimori_selectors = [
+        'div.b-shiki_editor', 'div.shiki_editor', 'div.news-body',
+        'div.b-news__body', 'div.news-content', 'div.body',
+        'div.content', 'div.b-news', 'div.news-full__text'
+    ]
+    if not main_content:
+        for selector in shikimori_selectors:
+            main_content = soup.select_one(selector)
+            if main_content:
+                break
+
+    # Общие селекторы
     if not main_content:
         selectors = [
             'article', 'div.news-content', 'div.content', 'div.news-text',
@@ -138,7 +160,8 @@ def fetch_full_text(entry):
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
-                return full_text
+                # Ограничиваем длину, чтобы не тащить лишний мусор
+                return full_text[:2000]
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -155,6 +178,7 @@ def extract_image_from_page(soup, page_url=None):
         'div.news_box img', 'article img', 'div.news_image img',
         'div.article_image img', 'div.full_news img',
         'div.news_content img', 'div.news-full__text img',
+        'div.b-shiki_editor img', 'div.shiki_editor img'   # для Shikimori
     ]
 
     for selector in selectors:
@@ -163,7 +187,7 @@ def extract_image_from_page(soup, page_url=None):
             src = (img_tag.get('src') or img_tag.get('data-src') or
                    img_tag.get('data-original') or img_tag.get('data-lazy-src'))
             if src:
-                return make_absolute(src, page_url or 'https://kg-portal.ru')
+                return make_absolute(src, page_url or 'https://shikimori.one')
 
     news_text = soup.select_one('div.news_text')
     if news_text:
@@ -171,17 +195,17 @@ def extract_image_from_page(soup, page_url=None):
             src = (img.get('src') or img.get('data-src') or
                    img.get('data-original') or img.get('data-lazy-src'))
             if src:
-                return make_absolute(src, page_url or 'https://kg-portal.ru')
+                return make_absolute(src, page_url or 'https://shikimori.one')
 
     og_image = soup.select_one('meta[property="og:image"]')
     if og_image and og_image.get('content'):
-        return make_absolute(og_image['content'], page_url or 'https://kg-portal.ru')
+        return make_absolute(og_image['content'], page_url or 'https://shikimori.one')
 
     for img in soup.find_all('img'):
         src = (img.get('src') or img.get('data-src') or
                img.get('data-original') or img.get('data-lazy-src'))
         if src and re.search(r'\.(jpg|jpeg|png|webp)(\?.*)?$', src, re.IGNORECASE):
-            return make_absolute(src, page_url or 'https://kg-portal.ru')
+            return make_absolute(src, page_url or 'https://shikimori.one')
 
     return None
 
@@ -208,6 +232,8 @@ def extract_image_url_from_entry(entry):
         link = entry.get('link', '')
         if 'kg-portal.ru' in link:
             base_domain = 'https://kg-portal.ru'
+        elif 'shikimori.one' in link:
+            base_domain = 'https://shikimori.one'
 
     if 'media_content' in entry:
         for media in entry.media_content:
@@ -463,23 +489,7 @@ def extract_title_hashtag(title):
         return make_hashtag(anime_name)
     return None
 
-def build_hashtags_line(title, video_url=None):
-    """Формирует строку с хэштегами, при наличии video_url прячет ссылку в последний тег."""
-    hashtags = ["#аниме", "#новости"]
-    title_tag = extract_title_hashtag(title)
-    if title_tag and title_tag not in hashtags:
-        hashtags.append(title_tag)
-
-    if video_url and title_tag:
-        # Оборачиваем последний тег в гиперссылку
-        hashtags[-1] = f'<a href="{video_url}">{title_tag}</a>'
-    elif video_url:
-        # Если title_tag нет, просто добавляем ссылку в скобках? Нет, не показываем.
-        pass
-
-    return " ".join(hashtags)
-
-def build_post_html(title, body, emoji='📄', video_url=None):
+def build_post_html(title, body, emoji='📄'):
     title_esc = escape_html(title)
     body_formatted = format_news_body(body) if body else ""
 
@@ -489,9 +499,13 @@ def build_post_html(title, body, emoji='📄', video_url=None):
         parts.append("┄┄┄ ✦ ┄┄┄")
         parts.append(body_formatted)
 
-    hashtags_line = build_hashtags_line(title, video_url)
+    hashtags = ["#аниме", "#новости"]
+    title_tag = extract_title_hashtag(title)
+    if title_tag and title_tag not in hashtags:
+        hashtags.append(title_tag)
+
     parts.append("")
-    parts.append(f"🏷️ {hashtags_line}")
+    parts.append("🏷️ " + " ".join(hashtags))
 
     return "\n".join(parts)
 
@@ -600,6 +614,10 @@ def rewrite_news(title, body):
 
         new_title = fix_quotes(new_title)
         new_title = fix_punctuation_spaces(new_title)
+        new_body = clean_and_paragraph(new_body)
+        new_body = fix_quotes(new_body)
+        new_body = fix_punctuation_spaces(new_body)
+        new_body = remove_garbage_lines(new_body)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -611,19 +629,24 @@ def rewrite_news(title, body):
         print(f"Ошибка при рерайте через GigaChat: {e}")
         return title, body
 
-def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
-    full_html = build_post_html(title, body, emoji, video_url)
+def build_caption_fit(title, body, emoji, max_len=1024):
+    full_html = build_post_html(title, body, emoji)
     plain_text = strip_html_tags(full_html)
 
     if len(plain_text) <= max_len:
         return full_html
 
-    hashtags_line = build_hashtags_line(title, video_url)
+    hashtags = ["#аниме", "#новости"]
+    title_tag = extract_title_hashtag(title)
+    if title_tag and title_tag not in hashtags:
+        hashtags.append(title_tag)
+    tags_str = " ".join(hashtags)
+
     title_plain = f"{emoji} {title}"
     separator_plain = "┄┄┄ ✦ ┄┄┄"
-    footer_plain = f"🏷️ {hashtags_line}"
+    footer_plain = f"🏷️ {tags_str}"
 
-    base_len = len(title_plain) + len(separator_plain) + len(strip_html_tags(footer_plain)) + 6
+    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6
     available = max_len - base_len
 
     if available < 50:
@@ -646,13 +669,9 @@ def build_caption_fit(title, body, emoji, max_len=1024, video_url=None):
             break
 
     truncated_body = '\n\n'.join(chosen)
-    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {hashtags_line}"
+    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
-    # Если есть YouTube-видео, игнорируем картинку
-    if is_youtube and video_url:
-        image_url = None
-
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
@@ -664,12 +683,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     title, body = rewrite_news(title, body)
 
-    final_video_url = to_short_youtube_url(video_url) if (video_url and is_youtube) else video_url
-
-    if image_url:
-        full_message = build_caption_fit(title, body, emoji, 1024, final_video_url)
+    if video_url or image_url:
+        full_message = build_caption_fit(title, body, emoji, 1024)
     else:
-        full_message = build_post_html(title, body, emoji, final_video_url)
+        full_message = build_post_html(title, body, emoji)
 
     if video_url and not is_youtube:
         try:
@@ -677,6 +694,24 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
+
+    if video_url and is_youtube:
+        video_file = download_youtube_video(video_url)
+        if video_file:
+            try:
+                bot.send_video(CHANNEL_ID, video_file, caption=full_message[:1024], parse_mode='HTML')
+                return
+            except Exception as e:
+                print(f"Не удалось отправить скачанное видео: {e}")
+
+        short_url = to_short_youtube_url(video_url)
+        bot.send_message(
+            CHANNEL_ID,
+            full_message + f"\n\nСмотреть: {short_url}",
+            parse_mode='HTML',
+            disable_web_page_preview=False
+        )
+        return
 
     if image_url:
         image_file = download_image(image_url, referer=link)
