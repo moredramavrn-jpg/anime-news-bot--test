@@ -25,7 +25,7 @@ USED_ANIME_FILE = "used_anime.txt"
 # Эмодзи для пунктов
 ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
 
-# Стоп-слова, которые указывают на спецвыпуски, фильмы и т.п.
+# Стоп-слова, указывающие на спецвыпуски, фильмы и т.п.
 BAD_SUBSTRINGS = [
     "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
     "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная"
@@ -64,9 +64,8 @@ def clean_anime_title(title):
     """
     Возвращает базовое название аниме, отбрасывая подзаголовки.
     Пример: 'Вольный стиль! Вечное лето — Спецвыпуск' -> 'Вольный стиль! Вечное лето'
-    Если строка сама является только спецвыпуском (например, 'Спецвыпуск'), вернёт пустую строку.
+    Если строка сама является только спецвыпуском, вернёт пустую строку.
     """
-    # Ищем разделитель, указывающий на подзаголовок
     for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
@@ -75,7 +74,6 @@ def clean_anime_title(title):
     if len(title) < 2:
         return ""
 
-    # Проверяем, есть ли в базовой части стоп-слова
     lower_title = title.lower()
     for bad in BAD_SUBSTRINGS:
         if bad in lower_title:
@@ -148,8 +146,7 @@ def generate_description(anime_name, token):
         data = response.json()
         desc = data["choices"][0]["message"]["content"].strip()
         desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
-        if desc:
-            desc = desc[0].upper() + desc[1:]
+        # Не делаем первую букву заглавной, т.к. описание идёт после дефиса
         return desc
     except Exception as e:
         print(f"Ошибка генерации описания для '{anime_name}': {e}")
@@ -182,7 +179,8 @@ def generate_recommendations():
             print(f"Не удалось получить описание для '{name}'")
             return None
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
-        card = f"{emoji} <b>{name}</b>\n{desc}"
+        # Формат: эмодзи название - описание (в одну строку)
+        card = f"{emoji} <b>{name}</b> - {desc}"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
