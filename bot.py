@@ -24,9 +24,10 @@ GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss",
-    "https://shikimori.one/forum/news.rss"
+    "https://kg-portal.ru/rss/news_anime.rss"
 ]
+
+SHIKIMORI_MAIN = "https://shikimori.io/"
 
 POSTED_FILE = "posted.txt"
 
@@ -123,17 +124,9 @@ def extract_full_text_from_page(soup):
     if not main_content:
         main_content = soup.select_one('div.news_text')  # КГ-Портал
 
-    # Специфические селекторы для Shikimori (на случай, если понадобится)
-    shikimori_selectors = [
-        'div.b-shiki_editor', 'div.shiki_editor', 'div.news-body',
-        'div.b-news__body', 'div.news-content', 'div.body',
-        'div.content', 'div.b-news', 'div.news-full__text'
-    ]
+    # Shikimori
     if not main_content:
-        for selector in shikimori_selectors:
-            main_content = soup.select_one(selector)
-            if main_content:
-                break
+        main_content = soup.select_one('div.body-inner')
 
     # Общие селекторы
     if not main_content:
@@ -164,14 +157,13 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    return full_text[:2000]  # ограничение длины
-        # fallback на summary
+                    return full_text[:2000]
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
         return ""
 
-    # Остальные источники (Goha, КГ-Портал) — как раньше
+    # Остальные источники
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -183,7 +175,6 @@ def fetch_full_text(entry):
         return clean_html(summary)
     return ""
 
-# ---------- Изображения ----------
 def extract_image_from_page(soup, page_url=None):
     if not soup:
         return None
@@ -194,8 +185,8 @@ def extract_image_from_page(soup, page_url=None):
         'div.news_box img', 'article img', 'div.news_image img',
         'div.article_image img', 'div.full_news img',
         'div.news_content img', 'div.news-full__text img',
-        'div.b-shiki_editor img', 'div.shiki_editor img',   # для Shikimori
-        'div.b-shiki_wall img'                              # картинки в новостях Shikimori
+        'div.b-shiki_editor img', 'div.shiki_editor img',
+        'div.b-shiki_wall img'
     ]
 
     for selector in selectors:
@@ -741,10 +732,90 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
+def fetch_shikimori_news_from_main_page():
+    """
+    Загружает главную страницу Shikimori и собирает новости из блоков
+    'Новости' и 'Ещё новости'. Возвращает список словарей:
+    {title, link, image_url}
+    """
+    soup = get_page_soup(SHIKIMORI_MAIN)
+    if not soup:
+        return []
+
+    news_items = []
+    seen_links = set()
+
+    # Основные новости
+    latest = soup.select_one('div.news_wall.latest-news')
+    if latest:
+        for article in latest.select('article.b-news_wall-topic'):
+            link = article.select_one('a[href*="/forum/news/"]')
+            if link:
+                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
+                title = article.select_one('div.title')
+                title_text = title.get_text(strip=True) if title else "Без названия"
+                # Изображение
+                img_tag = article.select_one('img')
+                image_url = None
+                if img_tag:
+                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
+                    if src:
+                        image_url = make_absolute(src, SHIKIMORI_MAIN)
+                if href not in seen_links:
+                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
+                    seen_links.add(href)
+
+    # Ещё новости
+    other = soup.select_one('div.news_wall.other-news')
+    if other:
+        for article in other.select('article.b-news_wall-topic'):
+            link = article.select_one('a[href*="/forum/news/"]')
+            if link:
+                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
+                title = article.select_one('div.title')
+                title_text = title.get_text(strip=True) if title else "Без названия"
+                img_tag = article.select_one('img')
+                image_url = None
+                if img_tag:
+                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
+                    if src:
+                        image_url = make_absolute(src, SHIKIMORI_MAIN)
+                if href not in seen_links:
+                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
+                    seen_links.add(href)
+
+    return news_items
+
 def main():
     links, titles = load_posted()
     new_posts = 0
 
+    # Обрабатываем Shikimori через главную страницу
+    print("Обрабатываю новости Shikimori с главной страницы...")
+    shikimori_news = fetch_shikimori_news_from_main_page()
+    for news in shikimori_news:
+        link = news['link']
+        title = news['title']
+        if is_duplicate(link, title, links, titles):
+            print(f"Дубликат пропущен: {title}")
+            continue
+
+        # Для Shikimori получаем полный текст через fetch_full_text
+        soup = get_page_soup(link)
+        full_text = fetch_full_text({'link': link, 'title': title})
+        image_url = news.get('image_url')
+        video_url, is_youtube = fetch_video_info({'link': link}, soup)
+
+        try:
+            send_post(title, full_text, link, image_url, video_url, is_youtube)
+            links.add(link)
+            titles.add(normalize_title(title))
+            new_posts += 1
+            print(f"Опубликовано: {title}")
+        except Exception as e:
+            print(f"Ошибка отправки для {link}: {e}")
+
+    # Обрабатываем RSS-ленты остальных источников
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
