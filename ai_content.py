@@ -6,7 +6,6 @@ import time
 import urllib3
 import telebot
 import requests
-from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,17 +18,6 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
-CONTENT_PLAN = {
-    0: "🎯 Топ-5 аниме, которые стоит посмотреть на этой неделе",
-    1: "📝 Совет: как выбрать аниме под настроение",
-    2: "🏆 Рейтинг: популярные аниме последних лет",
-    3: "🎲 Факт дня: интересное из мира аниме",
-    4: "🔮 Что посмотреть на выходных: подборка",
-    5: "💬 Мнение: почему классика аниме не устаревает",
-    6: "📅 Ожидания: анонсы и премьеры следующей недели",
-}
-
-EMOJI_POOL = ["🌸", "⚡", "🔥", "💥", "🌟", "🎬", "🍥", "🗡️", "✨", "💫"]
 USED_ANIME_FILE = "used_anime.txt"
 
 def get_gigachat_token():
@@ -154,53 +142,18 @@ def has_anime_titles(text):
         return True
     return False
 
-def split_into_paragraphs(text, sentences_per_par=2):
-    text = re.sub(r'\s*\n\s*', ' ', text).strip()
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    if len(sentences) <= sentences_per_par:
-        return text
-
-    paragraphs = []
-    current = []
-    for sent in sentences:
-        current.append(sent)
-        if len(current) == sentences_per_par:
-            paragraphs.append(" ".join(current))
-            current = []
-    if current:
-        paragraphs.append(" ".join(current))
-
-    return '\n\n'.join(paragraphs)
-
-def add_emoji_to_paragraphs(text):
-    paragraphs = text.split('\n\n')
-    decorated = []
-    for i, para in enumerate(paragraphs):
-        emoji = EMOJI_POOL[i % len(EMOJI_POOL)]
-        if re.match(r'^[\U0001F300-\U0001FAFF]', para):
-            decorated.append(para)
-        else:
-            decorated.append(f"{emoji} {para.strip()}")
-    return '\n\n'.join(decorated)
-
 def generate_content():
     token = get_gigachat_token()
     if not token:
         print("Не удалось получить токен GigaChat")
         return None
 
-    weekday = datetime.now().weekday()
-    topic = CONTENT_PLAN.get(weekday, "🎯 Подборка аниме")
-
-    is_rating = "Рейтинг" in topic or "Топ-5" in topic
-
     used_anime = load_used_anime()
     last_good = None
 
     for attempt in range(5):
-        if is_rating:
-            system_msg = "Ты — редактор аниме-канала. Ты составляешь рейтинги, используя официальные русские названия аниме."
-            prompt = f"""Составь рейтинг из 5 популярных аниме.
+        system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме, используя официальные русские названия."
+        prompt = f"""Составь топ-5 аниме, которые стоит посмотреть.
 Формат строго:
 🥇 «Название аниме» — описание из 2-3 предложений.
 🥈 «Название аниме» — описание из 2-3 предложений.
@@ -219,28 +172,7 @@ def generate_content():
 
 Выведи результат строго в формате:
 Заголовок: 5 популярных аниме, которые стоит посмотреть
-Текст: <текст рейтинга>
-"""
-        else:
-            system_msg = "Ты — опытный редактор аниме-канала. Ты пишешь конкретно, с эмодзи, без риторических вопросов и без выдуманных дат."
-            prompt = f"""Составь пост для Telegram-канала об аниме на тему: "{topic}".
-
-Обязательные требования:
-- Приведи конкретные названия аниме (минимум 3), желательно в кавычках «».
-- Используй ТОЛЬКО официальные русские названия аниме (как на Кинопоиске или Шикимори). Если точного русского названия нет, пропусти это аниме.
-- Никакой латиницы.
-- Укажи жанры, студии, годы выхода ТОЛЬКО если ты уверен.
-- Не выдумывай факты.
-- Текст должен быть полезным, информативным, без воды.
-- Запрещено задавать вопросы читателю.
-- Запрещены фразы "И что это...", "Как думаете...", "Непонятно...", "Впрочем...".
-- Разбей текст на 3-4 абзаца, каждый по 2-3 предложения.
-- Добавь в начало каждого абзаца подходящий эмодзи.
-{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {", ".join(sorted(used_anime))}.' if used_anime else ''}
-
-Выведи результат строго в формате:
-Заголовок: <заголовок поста>
-Текст: <текст поста>
+Текст: <текст топа>
 """
         try:
             response = requests.post(
@@ -259,7 +191,7 @@ def generate_content():
                         {"role": "user", "content": prompt}
                     ],
                     "temperature": 0.8,
-                    "max_tokens": 1200 if is_rating else 1000
+                    "max_tokens": 1200
                 },
                 timeout=30,
                 verify=False
@@ -277,17 +209,13 @@ def generate_content():
             if not title or not body:
                 continue
 
-            if is_rating:
-                title = "5 популярных аниме, которые стоит посмотреть"
+            title = "5 популярных аниме, которые стоит посмотреть"
 
             rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
             if rating_markers:
                 body = fix_rating_format(body)
                 body = wrap_titles_in_quotes(body)
                 body = remove_excess_emoji(body)
-            else:
-                body = split_into_paragraphs(body)
-                body = add_emoji_to_paragraphs(body)
 
             if not has_anime_titles(body):
                 print("В тексте нет названий аниме")
