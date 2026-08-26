@@ -71,13 +71,19 @@ def save_used_anime(anime_set):
             f.write(name + '\n')
 
 def extract_anime_names(text):
-    names = re.findall(r'«([^»]+)»|"([^"]+)"', text)
-    result = set()
-    for groups in names:
-        for g in groups:
-            if g:
-                result.add(g.strip().lower())
-    return result
+    # Извлекаем названия без кавычек и номеров
+    lines = text.split('\n')
+    names = []
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('─'):
+            continue
+        # Убираем начальный номер, если есть
+        line = re.sub(r'^\d+\.\s*', '', line)
+        # Если строка не пустая и не является описанием (длина > 3), считаем названием
+        if len(line) > 2:
+            names.append(line.lower())
+    return set(names)
 
 def parse_generated_text(raw_text):
     lines = raw_text.strip().split('\n')
@@ -101,74 +107,27 @@ def parse_generated_text(raw_text):
 
     return title, body
 
-def replace_rating_numbers(text):
-    text = re.sub(r'^4\.\s*', '💥 ', text, flags=re.MULTILINE)
-    text = re.sub(r'^5\.\s*', '🌟 ', text, flags=re.MULTILINE)
-    return text
-
-def remove_excess_emoji(text):
-    lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        m = re.match(r'^((?:🥇|🥈|🥉|💥|🌟)\s*)', line)
-        if m:
-            prefix = m.group(1)
-            rest = line[len(prefix):]
-            rest_no_emoji = re.sub(r'[\U0001F300-\U0001FAFF]', '', rest)
-            cleaned_lines.append(prefix + rest_no_emoji)
-        else:
-            cleaned_lines.append(line)
-    return '\n'.join(cleaned_lines)
-
-def fix_rating_format(text):
-    text = replace_rating_numbers(text)
-    text = re.sub(r'\s*\n\s*', ' ', text).strip()
-    pattern = r'(?=(?:🥇|🥈|🥉|💥|🌟)\s)'
-    parts = re.split(pattern, text)
-    parts = [p.strip() for p in parts if p.strip()]
-    return '\n\n'.join(parts)
-
-def wrap_titles_in_quotes(text):
-    lines = text.split('\n')
-    wrapped = []
-    for line in lines:
-        m = re.match(r'^((?:🥇|🥈|🥉|💥|🌟)\s*)([^—]+)(—.*)?$', line)
-        if m:
-            prefix = m.group(1)
-            title_part = m.group(2).strip()
-            rest = m.group(3) or ""
-            if not (title_part.startswith('«') and title_part.endswith('»')):
-                title_part = f"«{title_part}»"
-            wrapped.append(f"{prefix}{title_part} {rest}".strip())
-        else:
-            wrapped.append(line)
-    return '\n'.join(wrapped)
-
-def has_anime_titles(text):
-    if re.search(r'«[^»]+»|"[^"]+"', text):
-        return True
-    if re.search(r'(?:🥇|🥈|🥉|💥|🌟)\s*.+?—', text):
-        return True
-    return False
-
 def format_cards(text):
+    # Ожидаем, что каждый пункт разделён пустой строкой
     items = [p.strip() for p in text.split('\n\n') if p.strip()]
     cards = []
     for idx, item in enumerate(items):
-        m = re.match(r'^(🥇|🥈|🥉|💥|🌟)\s*«([^»]+)»\s*—\s*(.*)$', item)
-        if m:
-            emoji = m.group(1)
-            name = m.group(2)
-            desc = m.group(3)
-            # Первая буква описания с большой буквы
-            if desc:
-                desc = desc[0].upper() + desc[1:]
-            card = f"{emoji} <b>{name}</b>\n{desc}"
-            if idx < len(items) - 1:
-                card += "\n────────────────"
-            cards.append(card)
-        else:
-            cards.append(item)
+        lines = item.split('\n')
+        if not lines:
+            continue
+        first_line = lines[0].strip()
+        # Убираем номер и возможные эмодзи/кавычки
+        name = re.sub(r'^(?:\d+\.\s*|🥇\s*|🥈\s*|🥉\s*|💥\s*|🌟\s*)', '', first_line)
+        name = name.strip('«»"').strip()
+        # Описание — остальные строки
+        desc_lines = [l.strip() for l in lines[1:] if l.strip()]
+        desc = ' '.join(desc_lines)
+        if desc:
+            desc = desc[0].upper() + desc[1:]
+        card = f"<b>{name}</b>\n{desc}"
+        if idx < len(items) - 1:
+            card += "\n────────────────"
+        cards.append(card)
     return '\n'.join(cards)
 
 def generate_top_5():
@@ -195,16 +154,25 @@ def generate_top_5():
     prompt = f"""Составь подборку из 5 аниме, которые стоит посмотреть, используя только эти названия: {anime_list}.
 
 Формат строго:
-🥇 «Название аниме» — описание из 2-3 предложений.
-🥈 «Название аниме» — описание из 2-3 предложений.
-🥉 «Название аниме» — описание из 2-3 предложений.
-4. «Название аниме» — описание из 2-3 предложений.
-5. «Название аниме» — описание из 2-3 предложений.
+1. Название аниме
+Описание из 2-3 предложений.
 
-Каждый пункт — это ОДИН абзац. Не переноси описание на следующую строку.
-Не добавляй дополнительных абзацев после описания.
-Используй только один эмодзи перед названием (медаль или цифру). Больше никаких эмодзи в тексте.
-Названия обязательно в кавычках «».
+2. Название аниме
+Описание из 2-3 предложений.
+
+3. Название аниме
+Описание из 2-3 предложений.
+
+4. Название аниме
+Описание из 2-3 предложений.
+
+5. Название аниме
+Описание из 2-3 предложений.
+
+Каждый пункт — это номер, затем название (без кавычек), затем с новой строки описание.
+Не добавляй пустых строк между номером и названием, и между названием и описанием.
+Разделяй пункты пустой строкой.
+Не используй эмодзи.
 Не задавай вопросы, не пиши вводные слова.
 
 Выведи результат строго в формате:
@@ -248,13 +216,9 @@ def generate_top_5():
             if not title or not body:
                 continue
 
-            rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
-            if rating_markers:
-                body = fix_rating_format(body)
-                body = wrap_titles_in_quotes(body)
-                body = remove_excess_emoji(body)
-
-            if not has_anime_titles(body):
+            # Проверяем, что есть хотя бы 3 названия
+            extracted = extract_anime_names(body)
+            if len(extracted) < 3:
                 continue
 
             used_anime.update(chosen)
