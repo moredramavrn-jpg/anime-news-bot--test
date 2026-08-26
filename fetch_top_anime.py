@@ -6,11 +6,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 TOP_ANIME_FILE = "top_anime.txt"
-MAX_ANIME = 2000               # Целевое количество
-TOTAL_PAGES = 80               # Количество страниц Shikimori (можно менять)
-LIMIT_PER_PAGE = 50            # Записей на страницу (максимум 50)
+MAX_ANIME = 2000
+TOTAL_PAGES = 80
+LIMIT_PER_PAGE = 50
 
-# Стоп-слова для фильтрации нежелательных тайтлов
 BAD_SUBSTRINGS = [
     "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
     "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная",
@@ -42,48 +41,35 @@ def requests_retry_session(
     return session
 
 def clean_title(title):
-    """
-    Очищает название: убирает подзаголовки, сезоны, спецвыпуски.
-    Пример: 'Гинтама 7' -> 'Гинтама', 'Вольный стиль! Вечное лето — Спецвыпуск' -> 'Вольный стиль! Вечное лето'
-    Возвращает None, если название не подходит.
-    """
     if not title:
         return None
-
-    # Убираем подзаголовки после двоеточия, длинного тире и т.п.
     for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
-
-    # Убираем номер сезона/сиквела в конце (например, "Гинтама 7" -> "Гинтама")
     title = re.sub(r'(\s|-)\d+$', '', title).strip()
-
     if len(title) < 2:
         return None
-
     lower = title.lower()
     for bad in BAD_SUBSTRINGS:
         if bad in lower:
             return None
-
-    # Убираем лишние пробелы
     title = ' '.join(title.split())
     return title
 
 def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
     """
     Собирает вышедшие аниме с Shikimori.
-    Возвращает список названий.
+    Возвращает список кортежей: (название, жанры, количество серий)
     """
-    names = []
+    anime_data = []
     session = requests_retry_session()
     url = "https://shikimori.one/api/animes"
     params = {
         "order": "ranked",
-        "kind": "tv,movie,ova,ona,special",  # все типы
+        "kind": "tv,movie,ova,ona,special",
         "status": "released",
-        "rating": "g,pg,pg_13,r,r_plus",     # все рейтинги
+        "rating": "g,pg,pg_13,r,r_plus",
         "limit": limit,
         "page": 1,
     }
@@ -97,44 +83,63 @@ def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
             if not data:
                 print(f"Shikimori: страница {page} пуста, останавливаемся.")
                 break
+
             for anime in data:
                 name = anime.get("russian") or anime.get("english") or anime.get("name")
                 name = clean_title(name)
-                if name:
-                    names.append(name)
+                if not name:
+                    continue
+
+                # Жанры
+                genres = []
+                for g in anime.get("genres", []):
+                    genre_name = g.get("russian") or g.get("name")
+                    if genre_name:
+                        genres.append(genre_name)
+                genres_str = ", ".join(genres)
+
+                # Количество серий (эпизодов)
+                episodes = anime.get("episodes")
+                if episodes is None:
+                    episodes_str = "?"   # если неизвестно, можно оставить "?"
+                else:
+                    episodes_str = str(episodes)
+
+                anime_data.append((name, genres_str, episodes_str))
+
             print(f"Shikimori: получена страница {page} ({len(data)} записей)")
-            time.sleep(1)  # щадящая задержка
+            time.sleep(1)
         except Exception as e:
             print(f"Ошибка Shikimori на странице {page}: {e}")
             time.sleep(2)
             continue
-    return names
+    return anime_data
 
-def save_to_file(names):
+def save_to_file(anime_data):
     """
-    Сохраняет уникальные названия в файл, ограничивая количество MAX_ANIME.
+    Сохраняет уникальные записи в файл в формате:
+    Название|Жанры|Количество серий
     """
     unique = []
     seen = set()
-    for name in names:
+    for name, genres, episodes in anime_data:
         key = name.lower()
         if key not in seen:
             seen.add(key)
-            unique.append(name)
+            unique.append((name, genres, episodes))
             if len(unique) >= MAX_ANIME:
                 break
 
     with open(TOP_ANIME_FILE, 'w', encoding='utf-8') as f:
-        for name in unique:
-            f.write(name + '\n')
+        for name, genres, episodes in unique:
+            f.write(f"{name}|{genres}|{episodes}\n")
     print(f"Сохранено {len(unique)} аниме в {TOP_ANIME_FILE}")
 
 def main():
     print(f"=== Сбор с Shikimori (до {TOTAL_PAGES} страниц) ===")
-    names = fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE)
-    print(f"Shikimori: собрано {len(names)} названий до дедупликации")
-
-    save_to_file(names)
+    anime_data = fetch_shikimori_released()
+    print(f"Shikimori: собрано {len(anime_data)} записей до дедупликации")
+    save_to_file(anime_data)
 
 if __name__ == "__main__":
     main()
