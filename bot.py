@@ -107,17 +107,40 @@ def get_page_soup(url):
         print(f"Ошибка загрузки {url}: {e}")
         return None
 
-def extract_russian_anime_name(soup):
+def extract_russian_anime_names(soup):
     """
-    Извлекает русское название аниме со страницы новости Shikimori.
-    Возвращает строку или None.
+    Извлекает все пары английское-русское название со страницы новости Shikimori.
+    Возвращает словарь {английское: русское}.
     """
+    pairs = {}
     if not soup:
-        return None
-    name_ru_elem = soup.select_one('span.name-ru')
-    if name_ru_elem:
-        return name_ru_elem.get_text(strip=True)
-    return None
+        return pairs
+
+    # Ищем все элементы span.name-en, затем следующий span.name-ru внутри того же родителя
+    for name_en in soup.select('span.name-en'):
+        parent = name_en.find_parent()
+        if parent:
+            name_ru = parent.select_one('span.name-ru')
+            if name_ru:
+                en = name_en.get_text(strip=True)
+                ru = name_ru.get_text(strip=True)
+                if en and ru:
+                    pairs[en] = ru
+    return pairs
+
+def replace_anime_names(text, name_pairs):
+    """
+    Заменяет в тексте английские названия на русские (по словарю).
+    """
+    if not text or not name_pairs:
+        return text
+    for en, ru in name_pairs.items():
+        # Заменяем точное вхождение английского названия (регистр учитываем)
+        text = text.replace(en, ru)
+        # Также заменяем вариант в кавычках «» или "" уже обработается, но на всякий случай
+        text = text.replace(f'«{en}»', f'«{ru}»')
+        text = text.replace(f'"{en}"', f'«{ru}»')
+    return text
 
 def extract_full_text_from_page(soup):
     if not soup:
@@ -597,7 +620,6 @@ def rewrite_news(title, body):
     if not token:
         return title, body
 
-    # Обрезаем тело до разумного лимита
     body_part = body[:2000]
 
     prompt = f"""Перефразируй следующий текст новости, сохраняя все факты, названия и имена.
@@ -827,11 +849,13 @@ def main():
         image_url = news.get('image_url')
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
 
-        # Подменяем английское название на русское, если найдено
-        russian_name = extract_russian_anime_name(soup)
-        if russian_name:
-            # Заменяем первое вхождение текста в кавычках на русское название
-            title = re.sub(r'«[^»]+»', f'«{russian_name}»', title, count=1)
+        # Получаем словарь английских/русских названий
+        name_pairs = extract_russian_anime_names(soup)
+        if name_pairs:
+            # Заменяем английские названия на русские в заголовке
+            title = replace_anime_names(title, name_pairs)
+            # Заменяем в тексте
+            full_text = replace_anime_names(full_text, name_pairs)
 
         try:
             send_post(title, full_text, link, image_url, video_url, is_youtube)
