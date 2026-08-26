@@ -2,28 +2,47 @@ import requests
 import re
 
 POPULAR_ANIME_FILE = "popular_anime.txt"
-MAX_POPULAR = 100   # сколько популярных аниме сохранить
+MAX_POPULAR = 100
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "application/json"
 }
 
+# Стоп-слова, которые указывают на фильмы, спецвыпуски, OVA и т.п.
+BAD_SUBSTRINGS = [
+    "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
+    "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная",
+    "special", "movie", "season", "part", "episode", "final", "решающая игра"
+]
+
 def clean_title(title):
-    """
-    Убирает подзаголовки, сезоны, римские цифры и т.п.
-    Двоеточие не используется для обрезки, так как оно может быть частью названия (например, Re:Zero).
-    """
     if not title:
         return None
 
-    # Убираем подзаголовки после длинного тире или дефиса с пробелами (но не двоеточия!)
+    # Обрезаем по "!! " (например, "Волейбол!! Решающая игра на свалке" -> "Волейбол!!")
+    if '!! ' in title:
+        title = title.split('!! ')[0] + '!!'
+
+    # Убираем подзаголовки после длинного тире или дефиса с пробелами
     for sep in ['—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
 
-    # Убираем номер сезона/сиквела в конце (арабские цифры)
+    # Убираем конструкцию "3. Часть", "3 Season" и т.п.
+    title = re.sub(
+        r'\s+\d+\.?\s*(?:часть|сезон|part|season|special|спецвыпуск)\s*$',
+        '',
+        title,
+        flags=re.IGNORECASE
+    ).strip()
+
+    # Пропускаем названия с числом и точкой (например, "Евангелион 3.0+1.01")
+    if re.search(r'\d\.\d', title):
+        return None
+
+    # Убираем просто номер сезона/сиквела в конце (арабские цифры)
     title = re.sub(r'(\s|-)\d+$', '', title).strip()
 
     # Убираем римские цифры в конце
@@ -40,19 +59,20 @@ def clean_title(title):
     if len(title) < 2:
         return None
 
+    lower = title.lower()
+    for bad in BAD_SUBSTRINGS:
+        if bad in lower:
+            return None
+
     return ' '.join(title.split())
 
 def fetch_popular_from_shikimori():
-    """
-    Получает топ популярных аниме с Shikimori API.
-    Используем order=popularity, kind=tv, status=released.
-    """
     url = "https://shikimori.one/api/animes"
     params = {
-        "order": "popularity",     # сортировка по популярности
-        "kind": "tv",              # только сериалы
-        "status": "released",      # только завершённые
-        "limit": MAX_POPULAR,      # сколько взять (максимум 100 за раз)
+        "order": "popularity",
+        "kind": "tv",
+        "status": "released",
+        "limit": MAX_POPULAR,
         "page": 1
     }
 
@@ -62,6 +82,9 @@ def fetch_popular_from_shikimori():
         data = response.json()
         names = []
         for anime in data:
+            # Дополнительно убеждаемся, что формат именно TV
+            if anime.get("kind") != "tv":
+                continue
             name = anime.get("russian") or anime.get("english") or anime.get("name")
             name = clean_title(name)
             if name:
