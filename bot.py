@@ -30,6 +30,13 @@ RSS_URLS = [
 SHIKIMORI_MAIN = "https://shikimori.io/"
 
 POSTED_FILE = "posted.txt"
+LAST_POST_TIME_FILE = "last_post_time.txt"
+
+# Параметры ограничений
+QUIET_HOURS_START = 22   # час начала тишины (UTC)
+QUIET_HOURS_END = 9      # час окончания тишины (UTC)
+MIN_INTERVAL_SECONDS = 3600  # минимальный интервал между постами (1 час)
+MAX_POSTS_PER_RUN = 1    # максимум постов за один запуск
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -108,10 +115,6 @@ def get_page_soup(url):
         return None
 
 def extract_russian_anime_names(soup):
-    """
-    Извлекает все пары английское-русское название со страницы новости Shikimori.
-    Возвращает словарь {английское: русское}.
-    """
     pairs = {}
     if not soup:
         return pairs
@@ -128,9 +131,6 @@ def extract_russian_anime_names(soup):
     return pairs
 
 def replace_anime_names(text, name_pairs):
-    """
-    Заменяет в тексте английские названия на русские (по словарю).
-    """
     if not text or not name_pairs:
         return text
     for en, ru in name_pairs.items():
@@ -594,9 +594,6 @@ def get_gigachat_token():
         return None
 
 def remove_duplicate_start(title, body):
-    """
-    Убирает дублирование заголовка в начале текста.
-    """
     if not title or not body:
         return body
     title_clean = re.sub(r'<[^>]+>', '', title).strip().strip('«»').strip()
@@ -609,19 +606,6 @@ def remove_duplicate_start(title, body):
     if sentences and title_clean.lower() in sentences[0].lower():
         body_clean = ' '.join(sentences[1:]).strip()
     return body_clean
-
-def make_title_from_text(text):
-    """
-    Создаёт заголовок из первого предложения текста.
-    """
-    if not text:
-        return "", ""
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    if not sentences:
-        return text, ""
-    first = sentences[0].strip()
-    rest = ' '.join(sentences[1:]).strip()
-    return first, rest
 
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
@@ -845,9 +829,22 @@ def main():
     links, titles = load_posted()
     new_posts = 0
 
+    # Проверка времени и интервалов
+    if is_quiet_time():
+        print("Тихое время, посты не публикуются.")
+        return
+
+    last_post_time = load_last_post_time()
+    if last_post_time and (time.time() - last_post_time) < MIN_INTERVAL_SECONDS:
+        print("Интервал между постами ещё не прошёл.")
+        return
+
+    # Обработка Shikimori
     print("Обрабатываю новости Shikimori с главной страницы...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            break
         link = news['link']
         title = news['title']
         if is_duplicate(link, title, links, titles):
@@ -864,23 +861,20 @@ def main():
             title = replace_anime_names(title, name_pairs)
             full_text = replace_anime_names(full_text, name_pairs)
 
-        # Для Shikimori: делаем заголовок из первого предложения текста
-        if full_text:
-            new_title, new_body = make_title_from_text(full_text)
-            if new_title:
-                title = new_title
-                full_text = new_body
-
         try:
             send_post(title, full_text, link, image_url, video_url, is_youtube)
             links.add(link)
             titles.add(normalize_title(title))
             new_posts += 1
+            save_last_post_time(time.time())
             print(f"Опубликовано: {title}")
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
+    # Обработка RSS
     for rss_url in RSS_URLS:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            break
         print(f"Обрабатываю ленту: {rss_url}")
         try:
             feed = feedparser.parse(rss_url)
@@ -889,6 +883,8 @@ def main():
             continue
 
         for entry in feed.entries[:10]:
+            if new_posts >= MAX_POSTS_PER_RUN:
+                break
             if is_podcast_entry(entry):
                 print(f"Пропущен подкаст: {entry.get('title')}")
                 continue
@@ -909,6 +905,7 @@ def main():
                 links.add(link)
                 titles.add(normalize_title(title))
                 new_posts += 1
+                save_last_post_time(time.time())
                 print(f"Опубликовано: {title}")
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
