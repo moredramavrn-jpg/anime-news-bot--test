@@ -30,6 +30,7 @@ CONTENT_PLAN = {
 }
 
 EMOJI_POOL = ["🌸", "⚡", "🔥", "💥", "🌟", "🎬", "🍥", "🗡️", "✨", "💫"]
+USED_ANIME_FILE = "used_anime.txt"
 
 def get_gigachat_token():
     global gigachat_access_token, gigachat_token_expires_at
@@ -60,6 +61,27 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
+def load_used_anime():
+    if not os.path.exists(USED_ANIME_FILE):
+        return set()
+    with open(USED_ANIME_FILE, 'r', encoding='utf-8') as f:
+        return {line.strip().lower() for line in f if line.strip()}
+
+def save_used_anime(anime_set):
+    with open(USED_ANIME_FILE, 'w', encoding='utf-8') as f:
+        for name in anime_set:
+            f.write(name + '\n')
+
+def extract_anime_names(text):
+    """Извлекает названия аниме из текста в кавычках «» или " "."""
+    names = re.findall(r'«([^»]+)»|"([^"]+)"', text)
+    result = set()
+    for groups in names:
+        for g in groups:
+            if g:
+                result.add(g.strip().lower())
+    return result
+
 def parse_generated_text(raw_text):
     lines = raw_text.strip().split('\n')
     title = None
@@ -83,27 +105,19 @@ def parse_generated_text(raw_text):
     return title, body
 
 def replace_rating_numbers(text):
-    """Заменяет '4.' на 💥 и '5.' на 🌟."""
     text = re.sub(r'^4\.\s*', '💥 ', text, flags=re.MULTILINE)
     text = re.sub(r'^5\.\s*', '🌟 ', text, flags=re.MULTILINE)
     return text
 
 def remove_excess_emoji(text):
-    """
-    Оставляет только медали 🥇🥈🥉 и назначенные эмодзи 💥🌟,
-    удаляя все остальные эмодзи внутри описаний.
-    """
-    # Паттерн для начала пункта: медаль или назначенный эмодзи
     allowed = ['🥇', '🥈', '🥉', '💥', '🌟']
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
-        # Найти начало пункта (любой из allowed эмодзи в начале)
         m = re.match(r'^((?:🥇|🥈|🥉|💥|🌟)\s*)', line)
         if m:
             prefix = m.group(1)
             rest = line[len(prefix):]
-            # Удаляем все эмодзи из rest
             rest_no_emoji = re.sub(r'[\U0001F300-\U0001FAFF]', '', rest)
             cleaned_lines.append(prefix + rest_no_emoji)
         else:
@@ -111,27 +125,17 @@ def remove_excess_emoji(text):
     return '\n'.join(cleaned_lines)
 
 def fix_rating_format(text):
-    """
-    Приводит рейтинг к строгому виду: каждый пункт на отдельной строке.
-    """
-    # Заменяем цифры на эмодзи заранее
     text = replace_rating_numbers(text)
-
-    # Схлопываем все переносы строк в пробелы
     text = re.sub(r'\s*\n\s*', ' ', text).strip()
-
-    # Разбиваем по маркерам (🥇, 🥈, 🥉, 💥, 🌟)
     pattern = r'(?=(?:🥇|🥈|🥉|💥|🌟)\s)'
     parts = re.split(pattern, text)
     parts = [p.strip() for p in parts if p.strip()]
-
-    return '\n'.join(parts)
+    return '\n\n'.join(parts)  # <-- теперь абзацы между пунктами
 
 def wrap_titles_in_quotes(text):
     lines = text.split('\n')
     wrapped = []
     for line in lines:
-        # Ищем начало пункта: эмодзи + пробел, затем название до тире
         m = re.match(r'^((?:🥇|🥈|🥉|💥|🌟)\s*)([^—]+)(—.*)?$', line)
         if m:
             prefix = m.group(1)
@@ -189,10 +193,14 @@ def generate_content():
     weekday = datetime.now().weekday()
     topic = CONTENT_PLAN.get(weekday, "🎯 Подборка аниме")
 
-    if "Рейтинг" in topic or "Топ-5" in topic:
-        system_msg = "Ты — редактор аниме-канала. Ты составляешь рейтинги только из реально существующих аниме."
-        prompt = f"""Составь рейтинг из 5 популярных аниме, которые действительно существуют и широко известны.
+    # Загружаем использованные аниме
+    used_anime = load_used_anime()
+    used_list = ', '.join(sorted(used_anime)) if used_anime else ""
 
+    for attempt in range(3):
+        if "Рейтинг" in topic or "Топ-5" in topic:
+            system_msg = "Ты — редактор аниме-канала. Ты составляешь рейтинги только из реально существующих аниме."
+            prompt = f"""Составь рейтинг из 5 популярных аниме, которые действительно существуют и широко известны.
 Формат строго:
 🥇 «Название аниме» — описание из 2-3 предложений.
 🥈 «Название аниме» — описание из 2-3 предложений.
@@ -207,13 +215,15 @@ def generate_content():
 Не выдумывай названия. Только реальные аниме.
 Не задавай вопросы, не пиши вводные слова.
 
+{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {used_list}.' if used_list else ''}
+
 Выведи результат строго в формате:
 Заголовок: <заголовок поста>
 Текст: <текст рейтинга>
 """
-    else:
-        system_msg = "Ты — опытный редактор аниме-канала. Ты пишешь конкретно, с эмодзи, без риторических вопросов и без выдуманных дат."
-        prompt = f"""Составь пост для Telegram-канала об аниме на тему: "{topic}".
+        else:
+            system_msg = "Ты — опытный редактор аниме-канала. Ты пишешь конкретно, с эмодзи, без риторических вопросов и без выдуманных дат."
+            prompt = f"""Составь пост для Telegram-канала об аниме на тему: "{topic}".
 
 Обязательные требования:
 - Приведи конкретные названия аниме (минимум 3), желательно в кавычках «».
@@ -225,67 +235,78 @@ def generate_content():
 - Запрещены фразы "И что это...", "Как думаете...", "Непонятно...", "Впрочем...".
 - Разбей текст на 3-4 абзаца, каждый по 2-3 предложения.
 - Добавь в начало каждого абзаца подходящий эмодзи.
-- Напиши на русском языке.
+{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {used_list}.' if used_list else ''}
 
 Выведи результат строго в формате:
 Заголовок: <заголовок поста>
 Текст: <текст поста>
 """
-    try:
-        response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "X-Request-ID": str(uuid.uuid4()),
-                "X-Session-ID": str(uuid.uuid4()),
-                "User-Agent": "AnimeContentBot/1.0"
-            },
-            json={
-                "model": "GigaChat-3-Ultra",
-                "messages": [
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.7,
-                "max_tokens": 1200 if ("Рейтинг" in topic or "Топ-5" in topic) else 1000
-            },
-            timeout=30,
-            verify=False
-        )
-        response.raise_for_status()
-        data = response.json()
-        generated_text = data["choices"][0]["message"]["content"].strip()
+        try:
+            response = requests.post(
+                "https://api.giga.chat/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "X-Request-ID": str(uuid.uuid4()),
+                    "X-Session-ID": str(uuid.uuid4()),
+                    "User-Agent": "AnimeContentBot/1.0"
+                },
+                json={
+                    "model": "GigaChat-3-Ultra",
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 1200 if ("Рейтинг" in topic or "Топ-5" in topic) else 1000
+                },
+                timeout=30,
+                verify=False
+            )
+            response.raise_for_status()
+            data = response.json()
+            generated_text = data["choices"][0]["message"]["content"].strip()
 
-        print("=== RAW GigaChat Response ===")
-        print(generated_text)
-        print("============================")
+            print(f"=== Attempt {attempt+1} ===")
+            print(generated_text)
+            print("=====================")
 
-        title, body = parse_generated_text(generated_text)
+            title, body = parse_generated_text(generated_text)
 
-        if not title or not body:
-            print("Не удалось распознать результат GigaChat")
+            if not title or not body:
+                continue
+
+            rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
+            if rating_markers:
+                body = fix_rating_format(body)
+                body = wrap_titles_in_quotes(body)
+                body = remove_excess_emoji(body)
+            else:
+                body = split_into_paragraphs(body)
+                body = add_emoji_to_paragraphs(body)
+
+            if not has_anime_titles(body):
+                print("В сгенерированном тексте нет конкретных названий")
+                continue
+
+            # Проверяем на повторы
+            new_anime = extract_anime_names(body)
+            if new_anime & used_anime:
+                print("Найдены повторяющиеся аниме, пробуем ещё раз")
+                used_list = ', '.join(sorted(new_anime | used_anime))
+                continue
+
+            # Сохраняем использованные названия
+            save_used_anime(used_anime | new_anime)
+
+            return title, body
+
+        except Exception as e:
+            print(f"Ошибка генерации контента: {e}")
             return None
 
-        # Определяем, рейтинг ли это, по наличию маркеров
-        rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
-        if rating_markers:
-            body = fix_rating_format(body)
-            body = wrap_titles_in_quotes(body)
-            body = remove_excess_emoji(body)
-        else:
-            body = split_into_paragraphs(body)
-            body = add_emoji_to_paragraphs(body)
-
-        if not has_anime_titles(body):
-            print("В сгенерированном тексте нет конкретных названий")
-            return None
-
-        return title, body
-
-    except Exception as e:
-        print(f"Ошибка генерации контента: {e}")
-        return None
+    print("Не удалось сгенерировать контент после нескольких попыток")
+    return None
 
 def send_content_post(title, body):
     message = f"✨ <b>{html.escape(title)}</b>\n\n{body}\n\n#аниме #новости"
