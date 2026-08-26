@@ -577,78 +577,22 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
-def giga_request(prompt, max_tokens=300):
-    """Вспомогательная функция для запросов к GigaChat."""
-    token = get_gigachat_token()
-    if not token:
-        return ""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Request-ID": str(uuid.uuid4()),
-        "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeNewsBot/1.0"
-    }
-    payload = {
-        "model": "GigaChat-3-Ultra",
-        "messages": [
-            {"role": "system", "content": "Ты — эксперт по аниме."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": max_tokens
-    }
-    try:
-        response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30,
-            verify=False
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"Ошибка GigaChat: {e}")
-        return ""
-
-def enrich_title_with_russian(title):
-    """Если в заголовке есть латиница, добавляет русское название в скобках."""
-    if not re.search(r'[A-Za-z]', title):
-        return title
-
-    prompt = (
-        f"Для аниме с английским названием «{title}» найди или предложи русское название. "
-        "Если русское название известно, выведи его в формате: Английское название (Русское название). "
-        "Если русского названия нет, просто верни исходное название без изменений.\n"
-        "Не добавляй лишних комментариев. Выведи только итоговое название."
-    )
-    result = giga_request(prompt, max_tokens=100)
-    if result and result.strip():
-        return result.strip()
-    return title
-
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
-        print("GigaChat: нет ключа авторизации")
         return title, body
-
-    # Сначала обогащаем заголовок русским названием, если нужно
-    title = enrich_title_with_russian(title)
 
     token = get_gigachat_token()
     if not token:
         return title, body
 
-    body_part = body[:3000]
+    # Обрезаем тело до разумного лимита
+    body_part = body[:2000]
 
-    prompt = f"""Перепиши следующие заголовок и текст новости так, чтобы они стали уникальными, но сохранили все ключевые факты, имена, названия.
-Постарайся сохранить объём примерно 1500 символов. Не упускай важные детали.
-Разбей текст на логические абзацы, каждый абзац должен содержать ровно 2 предложения.
-Избегай дословного копирования. Используй стандартные кавычки «» и не ставь лишние пробелы.
-Не задавай вопросов, не пиши комментарии от себя, не используй вводные слова-рассуждения.
-Пиши на русском языке.
+    prompt = f"""Перефразируй следующий текст новости, сохраняя все факты, названия и имена.
+Не увеличивай объём: если текст короткий, оставь его коротким. Если текст длинный, можешь оставить его примерно той же длины, но не более 2000 символов.
+Не добавляй домыслы и не придумывай подробности.
+Разбей на абзацы по 2 предложения (если возможно). Используй кавычки «».
+Не задавай вопросов, не пиши от себя.
 
 Заголовок: {title}
 
@@ -674,7 +618,7 @@ def rewrite_news(title, body):
                     {"role": "system", "content": "Ты — редактор аниме-новостей."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.7,
+                "temperature": 0.4,
                 "max_tokens": 1200
             },
             timeout=30,
@@ -704,7 +648,6 @@ def rewrite_news(title, body):
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
             return new_title, new_body
         else:
-            print("GigaChat: не удалось распознать результат")
             return title, body
     except Exception as e:
         print(f"Ошибка при рерайте через GigaChat: {e}")
@@ -806,11 +749,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 def fetch_shikimori_news_from_main_page():
-    """
-    Загружает главную страницу Shikimori и собирает новости из блоков
-    'Новости' и 'Ещё новости'. Возвращает список словарей:
-    {title, link, image_url}
-    """
     soup = get_page_soup(SHIKIMORI_MAIN)
     if not soup:
         return []
@@ -827,7 +765,6 @@ def fetch_shikimori_news_from_main_page():
                 href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
                 title = article.select_one('div.title')
                 title_text = title.get_text(strip=True) if title else "Без названия"
-                # Изображение
                 img_tag = article.select_one('img')
                 image_url = None
                 if img_tag:
@@ -873,7 +810,6 @@ def main():
             print(f"Дубликат пропущен: {title}")
             continue
 
-        # Для Shikimori получаем полный текст через fetch_full_text
         soup = get_page_soup(link)
         full_text = fetch_full_text({'link': link, 'title': title})
         image_url = news.get('image_url')
