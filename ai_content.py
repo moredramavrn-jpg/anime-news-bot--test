@@ -3,6 +3,7 @@ import re
 import html
 import uuid
 import time
+import random
 import urllib3
 import telebot
 import requests
@@ -18,6 +19,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 gigachat_access_token = None
 gigachat_token_expires_at = 0
 
+TOP_ANIME_FILE = "top_anime.txt"
 USED_ANIME_FILE = "used_anime.txt"
 
 def get_gigachat_token():
@@ -49,6 +51,13 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
+def load_top_anime():
+    if not os.path.exists(TOP_ANIME_FILE):
+        print(f"Файл {TOP_ANIME_FILE} не найден")
+        return []
+    with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
+        return [line.strip() for line in f if line.strip()]
+
 def load_used_anime():
     if not os.path.exists(USED_ANIME_FILE):
         return set()
@@ -56,9 +65,8 @@ def load_used_anime():
         return {line.strip().lower() for line in f if line.strip()}
 
 def save_used_anime(anime_set):
-    anime_list = list(anime_set)[-200:]
     with open(USED_ANIME_FILE, 'w', encoding='utf-8') as f:
-        for name in anime_list:
+        for name in anime_set:
             f.write(name + '\n')
 
 def extract_anime_names(text):
@@ -142,17 +150,26 @@ def has_anime_titles(text):
         return True
     return False
 
-def generate_unique_top():
-    token = get_gigachat_token()
-    if not token:
-        print("Не удалось получить токен GigaChat")
+def generate_top_5():
+    all_anime = load_top_anime()
+    if not all_anime:
+        print("Список аниме пуст")
         return None
 
     used_anime = load_used_anime()
 
-    while True:
-        system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме, используя ТОЛЬКО официальные русские названия. Ты ОБЯЗАН исключить аниме, перечисленные в списке 'КРОМЕ'."
-        prompt = f"""Составь топ-5 аниме, которые стоит посмотреть.
+    # Выбираем 5 случайных названий, которых ещё не было
+    available = [a for a in all_anime if a.lower() not in used_anime]
+    if len(available) < 5:
+        # Если уникальных меньше 5, берём то, что есть (можно зациклить список)
+        available = all_anime
+
+    chosen = random.sample(available, 5)
+
+    anime_list = ", ".join(chosen)
+
+    prompt = f"""Составь топ-5 аниме, которые стоит посмотреть, используя только эти названия: {anime_list}.
+
 Формат строго:
 🥇 «Название аниме» — описание из 2-3 предложений.
 🥈 «Название аниме» — описание из 2-3 предложений.
@@ -164,16 +181,20 @@ def generate_unique_top():
 Не добавляй дополнительных абзацев после описания.
 Используй только один эмодзи перед названием (медаль или цифру). Больше никаких эмодзи в тексте.
 Названия обязательно в кавычках «».
-Используй ТОЛЬКО официальные русские названия аниме, которые точно существуют. Если не уверен в правильном русском названии — НЕ используй это аниме.
-Никакой латиницы. Не выдумывай названия.
 Не задавай вопросы, не пиши вводные слова.
-
-{f'КРОМЕ следующих аниме: {", ".join(sorted(used_anime))}.' if used_anime else ''}
 
 Выведи результат строго в формате:
 Заголовок: 5 популярных аниме, которые стоит посмотреть
 Текст: <текст топа>
 """
+    system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме только из предоставленного списка названий."
+
+    token = get_gigachat_token()
+    if not token:
+        print("Не удалось получить токен GigaChat")
+        return None
+
+    for attempt in range(3):
         try:
             response = requests.post(
                 "https://api.giga.chat/v1/chat/completions",
@@ -205,9 +226,7 @@ def generate_unique_top():
             print("=========================")
 
             title, body = parse_generated_text(generated_text)
-
             if not title or not body:
-                print("Не удалось распознать результат, пробуем снова")
                 continue
 
             title = "5 популярных аниме, которые стоит посмотреть"
@@ -219,21 +238,20 @@ def generate_unique_top():
                 body = remove_excess_emoji(body)
 
             if not has_anime_titles(body):
-                print("В тексте нет названий аниме, пробуем снова")
                 continue
 
-            new_anime = extract_anime_names(body)
-            if new_anime & used_anime:
-                print("Найдены повторяющиеся аниме, пробуем снова")
-                used_anime.update(new_anime)
-                continue
+            # Сохраняем выбранные названия
+            used_anime.update(chosen)
+            save_used_anime(used_anime)
 
-            save_used_anime(used_anime | new_anime)
             return title, body
 
         except Exception as e:
             print(f"Ошибка генерации: {e}")
             return None
+
+    print("Не удалось получить корректный ответ")
+    return None
 
 def send_content_post(title, body):
     message = f"✨ <b>{html.escape(title)}</b>\n\n{body}\n\n#аниме #новости"
@@ -244,7 +262,7 @@ def send_content_post(title, body):
         print(f"Ошибка отправки: {e}")
 
 def main():
-    result = generate_unique_top()
+    result = generate_top_5()
     if result:
         send_content_post(*result)
     else:
