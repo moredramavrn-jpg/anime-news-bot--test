@@ -25,7 +25,7 @@ USED_ANIME_FILE = "used_anime.txt"
 # Эмодзи для пунктов
 ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
 
-# Стоп-слова, указывающие на спецвыпуски, фильмы, сиквелы и т.п.
+# Стоп-слова, которые указывают на спецвыпуски, фильмы и т.п.
 BAD_SUBSTRINGS = [
     "спецвыпуск", "специальный", "фильм", "сезон", "часть", "ova", "ona",
     "спин-офф", "дополнение", "эпизод", "продолжение", "заключительная"
@@ -61,21 +61,33 @@ def get_gigachat_token():
         return None
 
 def clean_anime_title(title):
-    """Очищает название от подзаголовков и меток сиквелов/фильмов."""
-    # Разделяем по двоеточию или тире, берём только первую часть
-    for sep in [':', '—', ' - ']:
+    """
+    Возвращает базовое название аниме, отбрасывая подзаголовки.
+    Пример: 'Вольный стиль! Вечное лето — Спецвыпуск' -> 'Вольный стиль! Вечное лето'
+    Если строка сама является только спецвыпуском (например, 'Спецвыпуск'), вернёт пустую строку.
+    """
+    # Ищем разделитель, указывающий на подзаголовок
+    for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
-    # Удаляем остаточные слова-метки
+            break
+
+    if len(title) < 2:
+        return ""
+
+    # Проверяем, есть ли в базовой части стоп-слова
+    lower_title = title.lower()
     for bad in BAD_SUBSTRINGS:
-        if bad in title.lower():
+        if bad in lower_title:
             return ""
+
     return title.strip()
 
 def load_top_anime():
     if not os.path.exists(TOP_ANIME_FILE):
         print(f"Файл {TOP_ANIME_FILE} не найден")
         return []
+
     raw_names = []
     with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
         raw_names = [line.strip() for line in f if line.strip()]
@@ -84,12 +96,14 @@ def load_top_anime():
     seen = set()
     for name in raw_names:
         clean = clean_anime_title(name)
-        if not clean or len(clean) < 2:
+        if not clean:
             continue
         key = clean.lower()
         if key not in seen:
             seen.add(key)
             cleaned.append(clean)
+
+    print(f"Загружено {len(cleaned)} аниме после фильтрации.")
     return cleaned
 
 def load_used_anime():
@@ -105,7 +119,6 @@ def save_used_anime(anime_set):
             f.write(name + '\n')
 
 def generate_description(anime_name, token):
-    """Отдельный запрос к GigaChat для описания одного аниме."""
     prompt = f"Опиши аниме «{anime_name}» в 2-3 предложениях на русском языке. Не добавляй название, только описание."
     headers = {
         "Authorization": f"Bearer {token}",
@@ -174,7 +187,6 @@ def generate_recommendations():
             card += "\n────────────────"
         cards.append(card)
 
-    # Сохраняем использованные аниме
     used_anime.update(chosen)
     save_used_anime(used_anime)
 
