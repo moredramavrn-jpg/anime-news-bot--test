@@ -324,8 +324,8 @@ def extract_video_url_from_page(soup):
         if is_youtube_video(url):
             return url, True
 
-    # 2. Shikimori: блок с YouTube-видео
-    for a in soup.select('div.b-video.youtube a.video-link'):
+    # 2. Shikimori: блок с YouTube-видео (расширенный поиск)
+    for a in soup.select('div.b-video.youtube a.video-link, a.video-link[data-href*="youtube"], a.video-link[href*="youtube"]'):
         data_href = a.get('data-href') or a.get('href')
         if data_href:
             url = html.unescape(data_href)
