@@ -151,6 +151,31 @@ def has_anime_titles(text):
         return True
     return False
 
+def format_cards(text):
+    """
+    Преобразует каждый пункт топа в карточку с рамками.
+    """
+    items = [p.strip() for p in text.split('\n\n') if p.strip()]
+    cards = []
+    for item in items:
+        # Ищем маркер, название в кавычках и описание после тире
+        m = re.match(r'^(🥇|🥈|🥉|💥|🌟)\s*«([^»]+)»\s*—\s*(.*)$', item)
+        if m:
+            emoji = m.group(1)
+            name = m.group(2)
+            desc = m.group(3)
+            card = (
+                "┏━━━━━━━━━━━━━━━━┓\n"
+                f"{emoji} <b>«{name}»</b>\n"
+                "┗━━━━━━━━━━━━━━━━┛\n"
+                f"<i>{desc}</i>"
+            )
+            cards.append(card)
+        else:
+            # Если не удалось распарсить, оставляем как есть
+            cards.append(item)
+    return '\n\n'.join(cards)
+
 def generate_top_5():
     all_anime = load_top_anime()
     if not all_anime:
@@ -228,7 +253,6 @@ def generate_top_5():
             if not title or not body:
                 continue
 
-            # Применяем постобработку для рейтинга
             rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
             if rating_markers:
                 body = fix_rating_format(body)
@@ -253,7 +277,8 @@ def generate_top_5():
 def send_content_post(title, body):
     header = "✨ <b>Рубрика: пять популярных аниме, которые стоит посмотреть</b>"
     separator = "┄┄┄ ✦ ┄┄┄"
-    message = f"{header}\n{separator}\n\n{body.strip()}\n\n#аниме #новости"
+    cards = format_cards(body)
+    message = f"{header}\n{separator}\n\n{cards}\n\n#аниме #новости"
     try:
         bot.send_message(CHANNEL_ID, message, parse_mode='HTML', disable_web_page_preview=True)
         print("Контент-пост опубликован.")
