@@ -82,6 +82,24 @@ def parse_generated_text(raw_text):
 
     return title, body
 
+def remove_excess_emoji(text):
+    """Удаляет все эмодзи, кроме медалей 🥇🥈🥉 и стандартных цифр."""
+    # Оставляем только медали и цифры с точкой в начале пункта, остальные эмодзи убираем
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Ищем начало пункта: медаль или цифра с точкой
+        m = re.match(r'^((?:🥇|🥈|🥉|\d+\.)\s*)', line)
+        if m:
+            prefix = m.group(1)
+            rest = line[len(prefix):]
+            # Удаляем все эмодзи из rest
+            rest_no_emoji = re.sub(r'[\U0001F300-\U0001FAFF]', '', rest)
+            cleaned_lines.append(prefix + rest_no_emoji)
+        else:
+            cleaned_lines.append(line)
+    return '\n'.join(cleaned_lines)
+
 def fix_rating_format(text):
     """
     Приводит рейтинг к строгому виду:
@@ -90,7 +108,7 @@ def fix_rating_format(text):
     ...
     Все пункты на отдельных строках, без лишних абзацев.
     """
-    # Удаляем все текущие переносы строк, чтобы работать с единой строкой
+    # Удаляем все переносы строк, чтобы работать с единой строкой
     text = re.sub(r'\s*\n\s*', ' ', text).strip()
 
     # Разбиваем по маркерам (🥇, 🥈, 🥉, 4., 5.)
@@ -98,15 +116,8 @@ def fix_rating_format(text):
     parts = re.split(pattern, text)
     parts = [p.strip() for p in parts if p.strip()]
 
-    # Убираем возможные висящие номера внутри частей (например, "... 4. ")
-    cleaned_parts = []
-    for part in parts:
-        # Заменяем множественные пробелы
-        part = re.sub(r' {2,}', ' ', part)
-        cleaned_parts.append(part)
-
     # Объединяем обратно, но уже с переносами
-    return '\n'.join(cleaned_parts)
+    return '\n'.join(parts)
 
 def wrap_titles_in_quotes(text):
     """
@@ -172,7 +183,9 @@ def generate_content():
     weekday = datetime.now().weekday()
     topic = CONTENT_PLAN.get(weekday, "🎯 Подборка аниме")
 
-    if "Рейтинг" in topic:
+    is_rating = "Рейтинг" in topic
+
+    if is_rating:
         system_msg = "Ты — редактор аниме-канала. Ты составляешь рейтинги только из реально существующих аниме."
         prompt = f"""Составь рейтинг из 5 популярных аниме, которые действительно существуют и широко известны.
 
@@ -231,7 +244,7 @@ def generate_content():
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 1200 if "Рейтинг" in topic else 1000
+                "max_tokens": 1200 if is_rating else 1000
             },
             timeout=30,
             verify=False
@@ -250,10 +263,10 @@ def generate_content():
             print("Не удалось распознать результат GigaChat")
             return None
 
-        if "Рейтинг" in title:
+        if is_rating:
             body = fix_rating_format(body)
-            if not re.search(r'«[^»]+»|"[^"]+"', body):
-                body = wrap_titles_in_quotes(body)
+            body = wrap_titles_in_quotes(body)
+            body = remove_excess_emoji(body)
         else:
             body = split_into_paragraphs(body)
             body = add_emoji_to_paragraphs(body)
