@@ -24,7 +24,8 @@ GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss"
+    "https://kg-portal.ru/rss/news_anime.rss",
+    "https://shikimori.one/forum/news.rss"
 ]
 
 POSTED_FILE = "posted.txt"
