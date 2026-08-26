@@ -21,11 +21,46 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-def requests_retry_session(...):  # без изменений
-    ...
+def requests_retry_session(
+    retries=3,
+    backoff_factor=1,
+    status_forcelist=(500, 502, 503, 504),
+    session=None,
+):
+    session = session or requests.Session()
+    retry = Retry(
+        total=retries,
+        read=retries,
+        connect=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 def clean_title(title):
-    ...  # без изменений
+    if not title:
+        return None
+
+    for sep in [':', '—', ' - ', ' – ']:
+        if sep in title:
+            title = title.split(sep)[0].strip()
+            break
+
+    title = re.sub(r'(\s|-)\d+$', '', title).strip()
+
+    if len(title) < 2:
+        return None
+
+    lower = title.lower()
+    for bad in BAD_SUBSTRINGS:
+        if bad in lower:
+            return None
+
+    title = ' '.join(title.split())
+    return title
 
 def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
     names = []
@@ -80,7 +115,7 @@ def save_to_file(names):
 
 def main():
     print(f"=== Сбор с Shikimori (до {TOTAL_PAGES} страниц) ===")
-    names = fetch_shikimori_released()
+    names = fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE)
     print(f"Shikimori: собрано {len(names)} названий до дедупликации")
     save_to_file(names)
 
