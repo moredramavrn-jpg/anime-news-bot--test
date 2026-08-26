@@ -1,8 +1,8 @@
-name: AI Content Generator
+name: AI Top-5 Anime Weekly
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 12 * * 1'   # каждый понедельник в 12:00 UTC
   workflow_dispatch:
 
 permissions:
