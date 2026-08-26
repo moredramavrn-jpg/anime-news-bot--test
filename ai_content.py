@@ -145,7 +145,11 @@ def generate_description(anime_name, token):
         response.raise_for_status()
         data = response.json()
         desc = data["choices"][0]["message"]["content"].strip()
+        # Убираем возможное название в начале
         desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
+        # Принудительно делаем первую букву строчной
+        if desc:
+            desc = desc[0].lower() + desc[1:]
         return desc
     except Exception as e:
         print(f"Ошибка генерации описания для '{anime_name}': {e}")
@@ -178,7 +182,7 @@ def generate_recommendations():
             print(f"Не удалось получить описание для '{name}'")
             return None
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
-        # Формат: эмодзи название — описание (с длинным тире и строчной буквы)
+        # Формат: эмодзи название — описание (с длинным тире)
         card = f"{emoji} <b>{name}</b> — {desc}"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
