@@ -22,7 +22,7 @@ gigachat_token_expires_at = 0
 TOP_ANIME_FILE = "top_anime.txt"
 USED_ANIME_FILE = "used_anime.txt"
 
-# Эмодзи для пунктов
+# Эмодзи для пунктов (нужно минимум 3, но оставим 5)
 ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
 
 # Стоп-слова, указывающие на спецвыпуски, фильмы и т.п.
@@ -164,11 +164,11 @@ def generate_recommendations():
     used_anime = load_used_anime()
 
     available = [a for a in all_anime if a.lower() not in used_anime]
-    if len(available) < 5:
+    if len(available) < 3:
         print("Недостаточно новых аниме, начинаем использовать повторы")
         available = all_anime
 
-    chosen = random.sample(available, 5)
+    chosen = random.sample(available, 3)  # <-- теперь 3
 
     token = get_gigachat_token()
     if not token:
