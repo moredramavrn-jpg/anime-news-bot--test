@@ -88,24 +88,20 @@ def giga_request(prompt, token, max_tokens=300):
         return ""
 
 def generate_riddle(anime_name, token):
-    # Просим сделать загадку очень короткой (до 200 символов)
     prompt = (
         f"Придумай загадку-описание аниме «{anime_name}» длиной не более 200 символов. "
         "Опиши сюжет или персонажей, но не называй само аниме. "
         "Загадка должна давать подсказки. Выведи только текст загадки."
     )
     riddle = giga_request(prompt, token, max_tokens=200)
-    # На случай, если GigaChat всё же дал слишком длинный текст — обрезаем
     if len(riddle) > 250:
         riddle = riddle[:250].rsplit(' ', 1)[0] + '…'
     return riddle
 
 def send_riddle_poll(riddle_text, options, correct_index):
-    header = "🧩 Аниме-загадка"  # без HTML, чтобы не занимать лишние символы
+    header = "🧩 Аниме-загадка"
     question = f"{header}\n{riddle_text}"
-    # Убеждаемся, что общая длина вопроса не превышает 300 символов
     if len(question) > 300:
-        # Обрезаем загадку ещё сильнее
         max_riddle_len = 300 - len(header) - 1
         riddle_text = riddle_text[:max_riddle_len].rsplit(' ', 1)[0] + '…'
         question = f"{header}\n{riddle_text}"
@@ -117,7 +113,7 @@ def send_riddle_poll(riddle_text, options, correct_index):
             type="quiz",
             correct_option_id=correct_index,
             open_period=10800,          # 3 часа
-            is_anonymous=False
+            is_anonymous=True           # обязательно для каналов
         )
         print("Загадка-опрос опубликована.")
     except Exception as e:
