@@ -110,11 +110,19 @@ def giga_request(prompt, token, max_tokens=300):
         return ""
 
 def generate_description(anime_name, token):
-    prompt = f"Опиши аниме «{anime_name}» в 2-3 предложениях на русском языке. Не добавляй название, только описание."
-    desc = giga_request(prompt, token, max_tokens=300)
+    prompt = f"Опиши аниме «{anime_name}» в одном-двух предложениях, кратко, на русском языке. Не добавляй название, только описание."
+    desc = giga_request(prompt, token, max_tokens=200)
     desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
     if desc:
         desc = desc[0].lower() + desc[1:]
+
+    # Оставляем только первые два предложения (если больше)
+    sentences = re.split(r'(?<=[.!?])\s+', desc)
+    if len(sentences) > 2:
+        desc = ' '.join(sentences[:2]).strip()
+        # Убедимся, что последнее предложение заканчивается точкой
+        if desc and desc[-1] not in '.!?':
+            desc += '.'
     return desc
 
 def get_anime_meta(anime_name, token):
@@ -138,7 +146,6 @@ def get_anime_meta(anime_name, token):
     episodes = ""
     status = ""
 
-    # Извлекаем поля с помощью регулярных выражений (учитываем возможное отсутствие переносов)
     m = re.search(r'Жанр:\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
     if m:
         genres = m.group(1).strip()
@@ -151,7 +158,6 @@ def get_anime_meta(anime_name, token):
     if m:
         status = m.group(1).strip()
 
-    # Если поля слиплись (например, "17Статус:"), пытаемся вытащить число отдельно
     if episodes and 'Статус:' in episodes:
         episodes = re.sub(r'Статус:.*$', '', episodes).strip()
     if status and 'Статус:' in status:
@@ -202,20 +208,9 @@ def generate_recommendations():
         print(f"Запрос метаданных для '{name}'...")
         genres, episodes, status = get_anime_meta(name, token)
 
-        # Обрабатываем жанры
         genres_str = genres if genres else "жанр не указан"
-
-        # Обрабатываем количество серий
-        if episodes and episodes != "?":
-            episodes_str = episodes_word(episodes)
-        else:
-            episodes_str = "кол-во серий неизвестно"
-
-        # Обрабатываем статус
-        if status and status != "неизвестно":
-            status_str = status
-        else:
-            status_str = "статус неизвестен"
+        episodes_str = episodes_word(episodes) if episodes and episodes != "?" else "кол-во серий неизвестно"
+        status_str = status if status and status != "неизвестно" else "статус неизвестен"
 
         meta = f"{genres_str}, {episodes_str}, {status_str}"
 
