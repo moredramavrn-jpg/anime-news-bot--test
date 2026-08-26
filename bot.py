@@ -825,11 +825,30 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
+# ---------- Ограничения времени ----------
+def is_quiet_time():
+    current_hour = time.gmtime().tm_hour
+    if QUIET_HOURS_START <= current_hour or current_hour < QUIET_HOURS_END:
+        return True
+    return False
+
+def load_last_post_time():
+    if os.path.exists(LAST_POST_TIME_FILE):
+        try:
+            with open(LAST_POST_TIME_FILE, 'r') as f:
+                return float(f.read().strip())
+        except:
+            return 0
+    return 0
+
+def save_last_post_time(timestamp):
+    with open(LAST_POST_TIME_FILE, 'w') as f:
+        f.write(str(timestamp))
+
 def main():
     links, titles = load_posted()
     new_posts = 0
 
-    # Проверка времени и интервалов
     if is_quiet_time():
         print("Тихое время, посты не публикуются.")
         return
@@ -839,7 +858,6 @@ def main():
         print("Интервал между постами ещё не прошёл.")
         return
 
-    # Обработка Shikimori
     print("Обрабатываю новости Shikimori с главной страницы...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
@@ -871,7 +889,6 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # Обработка RSS
     for rss_url in RSS_URLS:
         if new_posts >= MAX_POSTS_PER_RUN:
             break
