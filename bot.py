@@ -272,7 +272,12 @@ def extract_image_url_from_entry(entry):
 
 # ---------- Видео ----------
 def is_youtube_video(url):
-    return ('youtube.com/watch' in url) or ('youtu.be/' in url)
+    return (
+        'youtube.com/watch' in url or
+        'youtu.be/' in url or
+        'youtube.com/embed/' in url or
+        'youtube-nocookie.com/embed/' in url
+    )
 
 def to_short_youtube_url(url):
     decoded_url = unquote(url)
@@ -283,6 +288,10 @@ def to_short_youtube_url(url):
             video_id = match.group(1)
     elif 'youtu.be/' in decoded_url:
         match = re.search(r'youtu\.be/([^?&]+)', decoded_url)
+        if match:
+            video_id = match.group(1)
+    elif 'youtube.com/embed/' in decoded_url:
+        match = re.search(r'youtube\.com/embed/([^?&]+)', decoded_url)
         if match:
             video_id = match.group(1)
     if video_id:
