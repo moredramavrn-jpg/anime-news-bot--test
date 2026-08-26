@@ -2,7 +2,7 @@ name: Update Top Anime List
 
 on:
   schedule:
-    - cron: '0 0 1 * *'   # 1 числа каждого месяца в 00:00 UTC
+    - cron: '0 3 * * 1'   # каждый понедельник в 03:00 UTC
   workflow_dispatch:
 
 permissions:
@@ -21,16 +21,16 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Run fetch script
+      - name: Fetch top anime
         run: python fetch_top_anime.py
 
-      - name: Commit updated top_anime.txt
+      - name: Commit updated list
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add top_anime.txt
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+            echo "No changes"
           else
             git commit -m "Update top_anime.txt"
             git push
