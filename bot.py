@@ -293,6 +293,7 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
+    # 1. Стандартные video / iframe / og:video
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -323,6 +324,15 @@ def extract_video_url_from_page(soup):
         if is_youtube_video(url):
             return url, True
 
+    # 2. Shikimori: блок с YouTube-видео
+    for a in soup.select('div.b-video.youtube a.video-link'):
+        data_href = a.get('data-href') or a.get('href')
+        if data_href:
+            url = html.unescape(data_href)
+            if is_youtube_video(url):
+                return url, True
+
+    # 3. Общий поиск ссылок с классом youtube
     for a in soup.select('a.youtube'):
         href = a.get('href', '')
         match = re.search(r'url=([^&]+)', href)
