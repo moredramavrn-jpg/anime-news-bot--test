@@ -12,7 +12,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
-TOP_ANIME_FILE = "top_anime.txt"
+POPULAR_ANIME_FILE = "popular_anime.txt"   # <-- теперь используется популярный список
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -48,11 +48,11 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
-def load_top_anime():
-    if not os.path.exists(TOP_ANIME_FILE):
-        print(f"Файл {TOP_ANIME_FILE} не найден")
+def load_popular_anime():
+    if not os.path.exists(POPULAR_ANIME_FILE):
+        print(f"Файл {POPULAR_ANIME_FILE} не найден")
         return []
-    with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
+    with open(POPULAR_ANIME_FILE, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
 
 def giga_request(prompt, token, max_tokens=300):
@@ -120,9 +120,9 @@ def send_riddle_poll(riddle_text, options, correct_index):
         print(f"Ошибка отправки опроса: {e}")
 
 def main():
-    all_anime = load_top_anime()
+    all_anime = load_popular_anime()
     if len(all_anime) < 4:
-        print("Недостаточно названий для создания вариантов")
+        print("Недостаточно названий для создания вариантов (нужно минимум 4)")
         return
 
     token = get_gigachat_token()
