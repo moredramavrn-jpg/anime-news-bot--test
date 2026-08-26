@@ -6,6 +6,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 TOP_ANIME_FILE = "top_anime.txt"
+MAX_ANIME = 2000               # Целевое количество
+TOTAL_PAGES = 80               # Количество страниц Shikimori (можно менять)
+LIMIT_PER_PAGE = 50            # Записей на страницу (максимум 50)
 
 # Стоп-слова для фильтрации нежелательных тайтлов
 BAD_SUBSTRINGS = [
@@ -68,7 +71,7 @@ def clean_title(title):
     title = ' '.join(title.split())
     return title
 
-def fetch_shikimori_released(total_pages=20, limit=50):
+def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
     """
     Собирает вышедшие аниме с Shikimori.
     Возвращает список названий.
@@ -92,7 +95,7 @@ def fetch_shikimori_released(total_pages=20, limit=50):
             r.raise_for_status()
             data = r.json()
             if not data:
-                print(f"Shikimori: страница {page} пуста, прекращаем.")
+                print(f"Shikimori: страница {page} пуста, останавливаемся.")
                 break
             for anime in data:
                 name = anime.get("russian") or anime.get("english") or anime.get("name")
@@ -103,50 +106,14 @@ def fetch_shikimori_released(total_pages=20, limit=50):
             time.sleep(1)  # щадящая задержка
         except Exception as e:
             print(f"Ошибка Shikimori на странице {page}: {e}")
-            # Пробуем следующую страницу после ошибки
             time.sleep(2)
             continue
     return names
 
-def fetch_jikan_finished(pages=3, limit=25):
+def save_to_file(names):
     """
-    Дополнительный сбор с MyAnimeList через Jikan API.
-    Возвращает список названий только со статусом 'Finished Airing'.
+    Сохраняет уникальные названия в файл, ограничивая количество MAX_ANIME.
     """
-    names = []
-    session = requests_retry_session()
-    url = "https://api.jikan.moe/v4/top/anime"
-    params = {
-        "limit": limit,
-        "page": 1,
-        "filter": "bypopularity"
-    }
-    for page in range(1, pages + 1):
-        params["page"] = page
-        try:
-            r = session.get(url, params=params, headers=HEADERS, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-            for anime in data.get("data", []):
-                if anime.get("status") != "Finished Airing":
-                    continue
-                title = anime.get("title_english") or anime.get("title")
-                title = clean_title(title)
-                if title:
-                    names.append(title)
-            print(f"Jikan: получена страница {page}")
-            time.sleep(2)  # Jikan имеет жёсткие лимиты
-        except Exception as e:
-            print(f"Ошибка Jikan на странице {page}: {e}")
-            time.sleep(3)
-            continue
-    return names
-
-def save_to_file(names, max_count=1000):
-    """
-    Сохраняет уникальные названия в файл, ограничивая количество max_count.
-    """
-    # Удаляем дубликаты, сохраняя порядок
     unique = []
     seen = set()
     for name in names:
@@ -154,7 +121,7 @@ def save_to_file(names, max_count=1000):
         if key not in seen:
             seen.add(key)
             unique.append(name)
-            if len(unique) >= max_count:
+            if len(unique) >= MAX_ANIME:
                 break
 
     with open(TOP_ANIME_FILE, 'w', encoding='utf-8') as f:
@@ -163,20 +130,11 @@ def save_to_file(names, max_count=1000):
     print(f"Сохранено {len(unique)} аниме в {TOP_ANIME_FILE}")
 
 def main():
-    all_names = []
+    print(f"=== Сбор с Shikimori (до {TOTAL_PAGES} страниц) ===")
+    names = fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE)
+    print(f"Shikimori: собрано {len(names)} названий до дедупликации")
 
-    print("=== Сбор с Shikimori ===")
-    shiki_names = fetch_shikimori_released(total_pages=20, limit=50)
-    all_names.extend(shiki_names)
-    print(f"Shikimori: всего {len(shiki_names)} названий")
-
-    print("\n=== Сбор с MyAnimeList (Jikan) ===")
-    jikan_names = fetch_jikan_finished(pages=3, limit=25)
-    all_names.extend(jikan_names)
-    print(f"Jikan: всего {len(jikan_names)} названий")
-
-    print("\n=== Сохранение результата ===")
-    save_to_file(all_names, max_count=1000)
+    save_to_file(names)
 
 if __name__ == "__main__":
     main()
