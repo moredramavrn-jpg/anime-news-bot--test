@@ -116,7 +116,6 @@ def extract_russian_anime_names(soup):
     if not soup:
         return pairs
 
-    # Ищем все элементы span.name-en, затем следующий span.name-ru внутри того же родителя
     for name_en in soup.select('span.name-en'):
         parent = name_en.find_parent()
         if parent:
@@ -135,9 +134,7 @@ def replace_anime_names(text, name_pairs):
     if not text or not name_pairs:
         return text
     for en, ru in name_pairs.items():
-        # Заменяем точное вхождение английского названия (регистр учитываем)
         text = text.replace(en, ru)
-        # Также заменяем вариант в кавычках «» или "" уже обработается, но на всякий случай
         text = text.replace(f'«{en}»', f'«{ru}»')
         text = text.replace(f'"{en}"', f'«{ru}»')
     return text
@@ -146,7 +143,6 @@ def extract_full_text_from_page(soup):
     if not soup:
         return ""
 
-    # Удаляем блоки комментариев, футер, хедер и прочий мусор
     for bad_selector in [
         'div.b-comments', 'div.comments', 'div.b-comment', 'div.comment',
         'div.b-toolbar', 'div.toolbar', 'footer', 'header',
@@ -159,11 +155,9 @@ def extract_full_text_from_page(soup):
     if not main_content:
         main_content = soup.select_one('div.news_text')  # КГ-Портал
 
-    # Shikimori
     if not main_content:
-        main_content = soup.select_one('div.body-inner')
+        main_content = soup.select_one('div.body-inner')  # Shikimori
 
-    # Общие селекторы
     if not main_content:
         selectors = [
             'article', 'div.news-content', 'div.content', 'div.news-text',
@@ -184,7 +178,6 @@ def extract_full_text_from_page(soup):
 def fetch_full_text(entry):
     link = entry.get('link', '')
 
-    # Для Shikimori загружаем страницу и берём текст из div.body-inner
     if 'shikimori' in link:
         soup = get_page_soup(link)
         if soup:
@@ -198,7 +191,6 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
-    # Остальные источники
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -229,14 +221,6 @@ def extract_image_from_page(soup, page_url=None):
         if img_tag:
             src = (img_tag.get('src') or img_tag.get('data-src') or
                    img_tag.get('data-original') or img_tag.get('data-lazy-src'))
-            if src:
-                return make_absolute(src, page_url or 'https://shikimori.one')
-
-    news_text = soup.select_one('div.news_text')
-    if news_text:
-        for img in news_text.find_all('img'):
-            src = (img.get('src') or img.get('data-src') or
-                   img.get('data-original') or img.get('data-lazy-src'))
             if src:
                 return make_absolute(src, page_url or 'https://shikimori.one')
 
@@ -337,7 +321,6 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # 1. Стандартные video / iframe / og:video
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -368,7 +351,6 @@ def extract_video_url_from_page(soup):
         if is_youtube_video(url):
             return url, True
 
-    # 2. Shikimori: блок с YouTube-видео (расширенный поиск)
     for a in soup.select('div.b-video.youtube a.video-link, a.video-link[data-href*="youtube"], a.video-link[href*="youtube"]'):
         data_href = a.get('data-href') or a.get('href')
         if data_href:
@@ -376,7 +358,6 @@ def extract_video_url_from_page(soup):
             if is_youtube_video(url):
                 return url, True
 
-    # 3. Общий поиск ссылок с классом youtube
     for a in soup.select('a.youtube'):
         href = a.get('href', '')
         match = re.search(r'url=([^&]+)', href)
@@ -612,6 +593,24 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
+def remove_duplicate_start(title, body):
+    """
+    Убирает дублирование заголовка в начале текста.
+    """
+    if not title or not body:
+        return body
+    title_clean = re.sub(r'<[^>]+>', '', title).strip().strip('«»').strip()
+    body_clean = re.sub(r'<[^>]+>', '', body).strip()
+    if body_clean.lower().startswith(title_clean.lower()):
+        body_clean = body_clean[len(title_clean):].lstrip('.,;:!? ')
+        if not body_clean:
+            return ""
+    # Если первое предложение содержит заголовок, удаляем его
+    sentences = re.split(r'(?<=[.!?])\s+', body_clean)
+    if sentences and title_clean.lower() in sentences[0].lower():
+        body_clean = ' '.join(sentences[1:]).strip()
+    return body_clean
+
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
         return title, body
@@ -677,6 +676,9 @@ def rewrite_news(title, body):
         new_body = fix_quotes(new_body)
         new_body = fix_punctuation_spaces(new_body)
         new_body = remove_garbage_lines(new_body)
+
+        # Убираем дублирование заголовка в начале текста
+        new_body = remove_duplicate_start(new_title, new_body)
 
         if new_title and new_body:
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
@@ -790,7 +792,6 @@ def fetch_shikimori_news_from_main_page():
     news_items = []
     seen_links = set()
 
-    # Основные новости
     latest = soup.select_one('div.news_wall.latest-news')
     if latest:
         for article in latest.select('article.b-news_wall-topic'):
@@ -809,7 +810,6 @@ def fetch_shikimori_news_from_main_page():
                     news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
                     seen_links.add(href)
 
-    # Ещё новости
     other = soup.select_one('div.news_wall.other-news')
     if other:
         for article in other.select('article.b-news_wall-topic'):
@@ -834,7 +834,6 @@ def main():
     links, titles = load_posted()
     new_posts = 0
 
-    # Обрабатываем Shikimori через главную страницу
     print("Обрабатываю новости Shikimori с главной страницы...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
@@ -849,12 +848,9 @@ def main():
         image_url = news.get('image_url')
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
 
-        # Получаем словарь английских/русских названий
         name_pairs = extract_russian_anime_names(soup)
         if name_pairs:
-            # Заменяем английские названия на русские в заголовке
             title = replace_anime_names(title, name_pairs)
-            # Заменяем в тексте
             full_text = replace_anime_names(full_text, name_pairs)
 
         try:
@@ -866,7 +862,6 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # Обрабатываем RSS-ленты остальных источников
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
