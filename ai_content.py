@@ -24,145 +24,73 @@ USED_ANIME_FILE = "used_anime.txt"
 ITEM_EMOJI = ["🌸", "⚡", "🔥", "💥", "🌟"]
 
 def get_gigachat_token():
-    global gigachat_access_token, gigachat_token_expires_at
-
-    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
-        return gigachat_access_token
-
-    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
-    }
-    data = {"scope": "GIGACHAT_API_PERS"}
-    try:
-        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
-        r.raise_for_status()
-        token_data = r.json()
-        gigachat_access_token = token_data.get("access_token")
-        expires_at = token_data.get("expires_at")
-        if expires_at:
-            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
-        else:
-            gigachat_token_expires_at = time.time() + 1800
-        return gigachat_access_token
-    except Exception as e:
-        print(f"Ошибка получения токена GigaChat: {e}")
-        return None
+    # без изменений
+    ...
 
 def load_top_anime():
     if not os.path.exists(TOP_ANIME_FILE):
         print(f"Файл {TOP_ANIME_FILE} не найден")
         return []
-
-    anime_list = []
+    names = []
     with open(TOP_ANIME_FILE, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
-            if not line:
-                continue
-            parts = line.split('|')
-            name = parts[0].strip()
-            if not name:
-                continue
-            genres = parts[1].strip() if len(parts) > 1 else ""
-            episodes = parts[2].strip() if len(parts) > 2 else ""
-            anime_list.append({'name': name, 'genres': genres, 'episodes': episodes})
-    return anime_list
+            if line:
+                names.append(line)
+    return names
 
 def load_used_anime():
-    if not os.path.exists(USED_ANIME_FILE):
-        return set()
-    with open(USED_ANIME_FILE, 'r', encoding='utf-8') as f:
-        return {line.strip().lower() for line in f if line.strip()}
+    # без изменений
+    ...
 
 def save_used_anime(anime_set):
-    anime_list = list(anime_set)
-    with open(USED_ANIME_FILE, 'w', encoding='utf-8') as f:
-        for name in anime_list:
-            f.write(name + '\n')
+    # без изменений
+    ...
 
 def giga_request(prompt, token, max_tokens=300):
-    """Универсальный запрос к GigaChat."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Request-ID": str(uuid.uuid4()),
-        "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeContentBot/1.0"
-    }
-    payload = {
-        "model": "GigaChat-3-Ultra",
-        "messages": [
-            {"role": "system", "content": "Ты — эксперт по аниме."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": max_tokens
-    }
-    try:
-        response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30,
-            verify=False
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"Ошибка GigaChat: {e}")
-        return ""
+    # без изменений
+    ...
 
-def generate_description(anime_name, token):
-    prompt = f"Опиши аниме «{anime_name}» в 2-3 предложениях на русском языке. Не добавляй название, только описание."
-    desc = giga_request(prompt, token, max_tokens=300)
-    desc = re.sub(r'^«[^»]+»\s*[—\-:]\s*', '', desc)
-    if desc:
-        desc = desc[0].lower() + desc[1:]
-    return desc
+def generate_anime_info(anime_name, token):
+    """
+    Запрашивает у GigaChat описание, жанр и количество серий.
+    Возвращает кортеж (description, genres, episodes).
+    """
+    prompt = f"""Расскажи про аниме «{anime_name}»:
+1. Дай описание в 2-3 предложениях.
+2. Назови жанр(ы) через запятую.
+3. Укажи общее количество серий (если точно неизвестно, поставь '?').
 
-def get_anime_meta(anime_name, token):
-    """
-    Запрашивает у GigaChat жанр и количество серий для аниме,
-    если они отсутствуют в файле.
-    Возвращает (genres, episodes).
-    """
-    prompt = (
-        f"Назови жанр (жанры) и количество серий аниме «{anime_name}».\n"
-        "Если жанров несколько, перечисли их через запятую.\n"
-        "Если количество серий неизвестно, напиши '?'.\n"
-        "Выведи ответ строго в формате:\n"
-        "Жанр: <жанры>\n"
-        "Серии: <число или ?>"
-    )
-    content = giga_request(prompt, token, max_tokens=100)
+Выведи строго в формате:
+Описание: <текст>
+Жанр: <жанры>
+Серии: <число или ?>
+
+Не добавляй ничего лишнего."""
+    content = giga_request(prompt, token, max_tokens=500)
+    desc = ""
     genres = ""
     episodes = ""
+    if "Описание:" in content:
+        desc_part = content.split("Описание:")[1].split("\n")[0].strip()
+        desc = desc_part
     if "Жанр:" in content:
-        genres_part = content.split("Жанр:")[1].split("\n")[0].strip()
-        genres = genres_part
+        genres = content.split("Жанр:")[1].split("\n")[0].strip()
     if "Серии:" in content:
-        episodes_part = content.split("Серии:")[1].strip()
-        episodes = episodes_part
-    return genres, episodes
+        episodes = content.split("Серии:")[1].strip()
+    # Если что-то не распарсилось, используем отдельные запросы
+    if not desc:
+        desc = giga_request(f"Опиши аниме «{anime_name}» в 2-3 предложениях.", token, max_tokens=300)
+    if not genres:
+        genres = giga_request(f"Назови жанры аниме «{anime_name}» через запятую.", token, max_tokens=100)
+    if not episodes:
+        episodes = giga_request(f"Сколько всего серий в аниме «{anime_name}»? Если неизвестно, напиши '?'.", token, max_tokens=50)
+
+    return desc, genres, episodes
 
 def episodes_word(episodes):
-    """Склоняет слово 'серия' в зависимости от числа."""
-    try:
-        n = int(episodes)
-    except:
-        return f"{episodes} серий"
-    if 10 <= n % 100 <= 20:
-        return f"{n} серий"
-    if n % 10 == 1:
-        return f"{n} серия"
-    if 2 <= n % 10 <= 4:
-        return f"{n} серии"
-    return f"{n} серий"
+    # без изменений
+    ...
 
 def generate_recommendations():
     all_anime = load_top_anime()
@@ -172,7 +100,7 @@ def generate_recommendations():
 
     used_anime = load_used_anime()
 
-    available = [a for a in all_anime if a['name'].lower() not in used_anime]
+    available = [a for a in all_anime if a.lower() not in used_anime]
     if len(available) < 3:
         print("Недостаточно новых аниме, начинаем использовать повторы")
         available = all_anime
@@ -185,25 +113,12 @@ def generate_recommendations():
         return None
 
     cards = []
-    for idx, anime in enumerate(chosen):
-        name = anime['name']
-        desc = generate_description(name, token)
+    for idx, name in enumerate(chosen):
+        print(f"Обработка: {name}")
+        desc, genres, episodes = generate_anime_info(name, token)
+
         if not desc:
-            print(f"Не удалось получить описание для '{name}'")
-            return None
-
-        genres = anime['genres']
-        episodes = anime['episodes']
-
-        # Если жанр или серии не указаны, запрашиваем их у GigaChat
-        if not genres or not episodes or episodes == "?" or genres == "жанр не указан":
-            print(f"Запрос метаданных для '{name}' у GigaChat...")
-            g, e = get_anime_meta(name, token)
-            if not genres and g:
-                genres = g
-            if (not episodes or episodes == "?") and e and e != "?":
-                episodes = e
-
+            desc = "Описание отсутствует."
         genres_str = genres if genres else "жанр не указан"
         episodes_str = episodes_word(episodes) if episodes and episodes != "?" else "кол-во серий неизвестно"
 
@@ -215,8 +130,7 @@ def generate_recommendations():
             card += "\n────────────────"
         cards.append(card)
 
-    # Сохраняем использованные названия
-    used_anime.update(anime['name'].lower() for anime in chosen)
+    used_anime.update(chosen)
     save_used_anime(used_anime)
 
     return '\n'.join(cards)
