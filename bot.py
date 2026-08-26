@@ -123,7 +123,7 @@ def extract_full_text_from_page(soup):
     if not main_content:
         main_content = soup.select_one('div.news_text')  # КГ-Портал
 
-    # Специфические селекторы для Shikimori
+    # Специфические селекторы для Shikimori (на случай, если понадобится)
     shikimori_selectors = [
         'div.b-shiki_editor', 'div.shiki_editor', 'div.news-body',
         'div.b-news__body', 'div.news-content', 'div.body',
@@ -155,14 +155,23 @@ def extract_full_text_from_page(soup):
 
 def fetch_full_text(entry):
     link = entry.get('link', '')
-    # Для Shikimori используем только summary из RSS, чтобы избежать мусора
+
+    # Для Shikimori загружаем страницу и берём текст из div.body-inner
     if 'shikimori' in link:
+        soup = get_page_soup(link)
+        if soup:
+            body_inner = soup.select_one('div.body-inner')
+            if body_inner:
+                full_text = clean_html(str(body_inner))
+                if full_text:
+                    return full_text[:2000]  # ограничение длины
+        # fallback на summary
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
-        return ""  # если summary пусто, не идём на страницу
+        return ""
 
-    # Для остальных источников оставляем текущую логику
+    # Остальные источники (Goha, КГ-Портал) — как раньше
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -185,7 +194,8 @@ def extract_image_from_page(soup, page_url=None):
         'div.news_box img', 'article img', 'div.news_image img',
         'div.article_image img', 'div.full_news img',
         'div.news_content img', 'div.news-full__text img',
-        'div.b-shiki_editor img', 'div.shiki_editor img'   # для Shikimori
+        'div.b-shiki_editor img', 'div.shiki_editor img',   # для Shikimori
+        'div.b-shiki_wall img'                              # картинки в новостях Shikimori
     ]
 
     for selector in selectors:
