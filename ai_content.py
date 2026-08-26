@@ -65,8 +65,9 @@ def load_used_anime():
         return {line.strip().lower() for line in f if line.strip()}
 
 def save_used_anime(anime_set):
+    anime_list = list(anime_set)
     with open(USED_ANIME_FILE, 'w', encoding='utf-8') as f:
-        for name in anime_set:
+        for name in anime_list:
             f.write(name + '\n')
 
 def extract_anime_names(text):
@@ -158,15 +159,18 @@ def generate_top_5():
 
     used_anime = load_used_anime()
 
-    # Выбираем 5 случайных названий, которых ещё не было
     available = [a for a in all_anime if a.lower() not in used_anime]
     if len(available) < 5:
-        # Если уникальных меньше 5, берём то, что есть (можно зациклить список)
+        print("Недостаточно новых аниме, начинаем использовать повторы")
         available = all_anime
 
     chosen = random.sample(available, 5)
-
     anime_list = ", ".join(chosen)
+
+    token = get_gigachat_token()
+    if not token:
+        print("Не удалось получить токен GigaChat")
+        return None
 
     prompt = f"""Составь топ-5 аниме, которые стоит посмотреть, используя только эти названия: {anime_list}.
 
@@ -188,11 +192,6 @@ def generate_top_5():
 Текст: <текст топа>
 """
     system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме только из предоставленного списка названий."
-
-    token = get_gigachat_token()
-    if not token:
-        print("Не удалось получить токен GigaChat")
-        return None
 
     for attempt in range(3):
         try:
@@ -229,18 +228,11 @@ def generate_top_5():
             if not title or not body:
                 continue
 
-            title = "5 популярных аниме, которые стоит посмотреть"
-
-            rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
-            if rating_markers:
-                body = fix_rating_format(body)
-                body = wrap_titles_in_quotes(body)
-                body = remove_excess_emoji(body)
-
+            # Проверяем, что тело содержит пункты
             if not has_anime_titles(body):
                 continue
 
-            # Сохраняем выбранные названия
+            # Сохраняем выбранные аниме как использованные
             used_anime.update(chosen)
             save_used_anime(used_anime)
 
@@ -254,7 +246,9 @@ def generate_top_5():
     return None
 
 def send_content_post(title, body):
-    message = f"✨ <b>{html.escape(title)}</b>\n\n{body}\n\n#аниме #новости"
+    header = "✨ <b>Рубрика: пять популярных аниме, которые стоит посмотреть</b>"
+    separator = "┄┄┄ ✦ ┄┄┄"
+    message = f"{header}\n{separator}\n\n{body}\n\n#аниме #новости"
     try:
         bot.send_message(CHANNEL_ID, message, parse_mode='HTML', disable_web_page_preview=True)
         print("Контент-пост опубликован.")
