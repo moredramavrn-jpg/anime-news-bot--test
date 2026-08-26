@@ -88,21 +88,27 @@ def giga_request(prompt, token, max_tokens=300):
         return ""
 
 def generate_riddle(anime_name, token):
+    # Просим сделать загадку очень короткой (до 200 символов)
     prompt = (
-        f"Придумай загадку-описание аниме «{anime_name}». Опиши сюжет, персонажей или ключевые детали, "
-        "но не называй само аниме. Загадка должна быть интересной и давать подсказки. "
-        "Выведи только текст загадки (без вступления и ответа)."
+        f"Придумай загадку-описание аниме «{anime_name}» длиной не более 200 символов. "
+        "Опиши сюжет или персонажей, но не называй само аниме. "
+        "Загадка должна давать подсказки. Выведи только текст загадки."
     )
-    return giga_request(prompt, token, max_tokens=250)
+    riddle = giga_request(prompt, token, max_tokens=200)
+    # На случай, если GigaChat всё же дал слишком длинный текст — обрезаем
+    if len(riddle) > 250:
+        riddle = riddle[:250].rsplit(' ', 1)[0] + '…'
+    return riddle
 
 def send_riddle_poll(riddle_text, options, correct_index):
-    """
-    Отправляет опрос с загадкой и 4 вариантами ответа.
-    correct_index — индекс правильного варианта (0-3).
-    open_period — через сколько секунд показать ответ (3 часа = 10800).
-    """
-    header = "🧩 <b>Аниме-загадка</b>\n"
-    question = f"{header}{riddle_text}"
+    header = "🧩 Аниме-загадка"  # без HTML, чтобы не занимать лишние символы
+    question = f"{header}\n{riddle_text}"
+    # Убеждаемся, что общая длина вопроса не превышает 300 символов
+    if len(question) > 300:
+        # Обрезаем загадку ещё сильнее
+        max_riddle_len = 300 - len(header) - 1
+        riddle_text = riddle_text[:max_riddle_len].rsplit(' ', 1)[0] + '…'
+        question = f"{header}\n{riddle_text}"
     try:
         bot.send_poll(
             chat_id=CHANNEL_ID,
@@ -128,7 +134,6 @@ def main():
         print("Не удалось получить токен GigaChat")
         return
 
-    # Выбираем правильное аниме и 3 случайных других
     correct_anime = random.choice(all_anime)
     wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
     if len(wrong_pool) < 3:
@@ -136,18 +141,15 @@ def main():
         return
     wrong_answers = random.sample(wrong_pool, 3)
 
-    # Генерируем загадку
     riddle_text = generate_riddle(correct_anime, token)
     if not riddle_text:
         print("Не удалось сгенерировать загадку")
         return
 
-    # Формируем варианты и запоминаем правильный индекс
     options = [correct_anime] + wrong_answers
     random.shuffle(options)
     correct_index = options.index(correct_anime)
 
-    # Отправляем опрос
     send_riddle_poll(riddle_text, options, correct_index)
 
 if __name__ == "__main__":
