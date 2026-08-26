@@ -228,11 +228,9 @@ def generate_top_5():
             if not title or not body:
                 continue
 
-            # Проверяем, что тело содержит пункты
             if not has_anime_titles(body):
                 continue
 
-            # Сохраняем выбранные аниме как использованные
             used_anime.update(chosen)
             save_used_anime(used_anime)
 
@@ -248,7 +246,7 @@ def generate_top_5():
 def send_content_post(title, body):
     header = "✨ <b>Рубрика: пять популярных аниме, которые стоит посмотреть</b>"
     separator = "┄┄┄ ✦ ┄┄┄"
-    message = f"{header}\n{separator}\n\n{body}\n\n#аниме #новости"
+    message = f"{header}\n{separator}\n\n{body.strip()}\n\n#аниме #новости"
     try:
         bot.send_message(CHANNEL_ID, message, parse_mode='HTML', disable_web_page_preview=True)
         print("Контент-пост опубликован.")
