@@ -577,14 +577,68 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
+def giga_request(prompt, max_tokens=300):
+    """Вспомогательная функция для запросов к GigaChat."""
+    token = get_gigachat_token()
+    if not token:
+        return ""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeNewsBot/1.0"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {"role": "system", "content": "Ты — эксперт по аниме."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.3,
+        "max_tokens": max_tokens
+    }
+    try:
+        response = requests.post(
+            "https://api.giga.chat/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30,
+            verify=False
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Ошибка GigaChat: {e}")
+        return ""
+
+def enrich_title_with_russian(title):
+    """Если в заголовке есть латиница, добавляет русское название в скобках."""
+    if not re.search(r'[A-Za-z]', title):
+        return title
+
+    prompt = (
+        f"Для аниме с английским названием «{title}» найди или предложи русское название. "
+        "Если русское название известно, выведи его в формате: Английское название (Русское название). "
+        "Если русского названия нет, просто верни исходное название без изменений.\n"
+        "Не добавляй лишних комментариев. Выведи только итоговое название."
+    )
+    result = giga_request(prompt, max_tokens=100)
+    if result and result.strip():
+        return result.strip()
+    return title
+
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
         print("GigaChat: нет ключа авторизации")
         return title, body
 
+    # Сначала обогащаем заголовок русским названием, если нужно
+    title = enrich_title_with_russian(title)
+
     token = get_gigachat_token()
     if not token:
-        print("GigaChat: не удалось получить токен")
         return title, body
 
     body_part = body[:3000]
