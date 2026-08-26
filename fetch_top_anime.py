@@ -4,7 +4,6 @@ import re
 POPULAR_ANIME_FILE = "popular_anime.txt"
 MAX_POPULAR = 100   # сколько популярных аниме сохранить
 
-# Заголовки, чтобы API не заблокировал запрос
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
     "Accept": "application/json"
@@ -13,12 +12,13 @@ HEADERS = {
 def clean_title(title):
     """
     Убирает подзаголовки, сезоны, римские цифры и т.п.
+    Двоеточие не используется для обрезки, так как оно может быть частью названия (например, Re:Zero).
     """
     if not title:
         return None
 
-    # Убираем подзаголовки после двоеточия и тире
-    for sep in [':', '—', ' - ', ' – ']:
+    # Убираем подзаголовки после длинного тире или дефиса с пробелами (но не двоеточия!)
+    for sep in ['—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
@@ -62,7 +62,6 @@ def fetch_popular_from_shikimori():
         data = response.json()
         names = []
         for anime in data:
-            # Приоритет русскому названию, затем английскому, затем оригинальному
             name = anime.get("russian") or anime.get("english") or anime.get("name")
             name = clean_title(name)
             if name:
