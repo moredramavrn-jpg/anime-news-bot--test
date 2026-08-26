@@ -228,6 +228,13 @@ def generate_top_5():
             if not title or not body:
                 continue
 
+            # Применяем постобработку для рейтинга
+            rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
+            if rating_markers:
+                body = fix_rating_format(body)
+                body = wrap_titles_in_quotes(body)
+                body = remove_excess_emoji(body)
+
             if not has_anime_titles(body):
                 continue
 
