@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import time
 import uuid
@@ -99,8 +100,6 @@ def generate_question(anime_name, token):
     )
     question = giga_request(prompt, token, max_tokens=250)
     # Убираем многоточие в конце, если оно есть
-    question = re.sub(r'\.{3,}$', '', question).strip()
-    # Если после обрезки осталось многоточие, тоже убираем
     question = re.sub(r'\.{3,}$', '', question).strip()
     # Обрезаем, если длиннее 250 символов (без добавления многоточия)
     if len(question) > 250:
