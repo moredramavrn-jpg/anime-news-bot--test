@@ -44,12 +44,23 @@ def clean_title(title):
     if not title:
         return None
 
+    # Убираем подзаголовки после двоеточия, длинного тире и т.п.
     for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
 
+    # Убираем номер сезона/сиквела в конце (арабские цифры)
     title = re.sub(r'(\s|-)\d+$', '', title).strip()
+
+    # Убираем римские цифры в конце (I, II, III, IV, V, VI, VII, VIII, IX, X и т.д.)
+    # Паттерн покрывает корректные римские числа до нескольких тысяч
+    title = re.sub(
+        r'(?:\s|-)M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
+        '',
+        title,
+        flags=re.IGNORECASE
+    ).strip()
 
     if len(title) < 2:
         return None
