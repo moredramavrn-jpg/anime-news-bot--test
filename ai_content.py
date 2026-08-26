@@ -73,7 +73,6 @@ def save_used_anime(anime_set):
             f.write(name + '\n')
 
 def extract_anime_names(text):
-    """Извлекает названия аниме из текста в кавычках «» или " "."""
     names = re.findall(r'«([^»]+)»|"([^"]+)"', text)
     result = set()
     for groups in names:
@@ -110,7 +109,6 @@ def replace_rating_numbers(text):
     return text
 
 def remove_excess_emoji(text):
-    allowed = ['🥇', '🥈', '🥉', '💥', '🌟']
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -130,7 +128,7 @@ def fix_rating_format(text):
     pattern = r'(?=(?:🥇|🥈|🥉|💥|🌟)\s)'
     parts = re.split(pattern, text)
     parts = [p.strip() for p in parts if p.strip()]
-    return '\n\n'.join(parts)  # <-- теперь абзацы между пунктами
+    return '\n\n'.join(parts)
 
 def wrap_titles_in_quotes(text):
     lines = text.split('\n')
@@ -193,12 +191,13 @@ def generate_content():
     weekday = datetime.now().weekday()
     topic = CONTENT_PLAN.get(weekday, "🎯 Подборка аниме")
 
-    # Загружаем использованные аниме
     used_anime = load_used_anime()
     used_list = ', '.join(sorted(used_anime)) if used_anime else ""
 
     for attempt in range(3):
-        if "Рейтинг" in topic or "Топ-5" in topic:
+        is_rating = "Рейтинг" in topic or "Топ-5" in topic
+
+        if is_rating:
             system_msg = "Ты — редактор аниме-канала. Ты составляешь рейтинги только из реально существующих аниме."
             prompt = f"""Составь рейтинг из 5 популярных аниме, которые действительно существуют и широко известны.
 Формат строго:
@@ -218,7 +217,7 @@ def generate_content():
 {f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {used_list}.' if used_list else ''}
 
 Выведи результат строго в формате:
-Заголовок: <заголовок поста>
+Заголовок: 5 популярных аниме, которые стоит посмотреть
 Текст: <текст рейтинга>
 """
         else:
@@ -258,7 +257,7 @@ def generate_content():
                         {"role": "user", "content": prompt}
                     ],
                     "temperature": 0.7,
-                    "max_tokens": 1200 if ("Рейтинг" in topic or "Топ-5" in topic) else 1000
+                    "max_tokens": 1200 if is_rating else 1000
                 },
                 timeout=30,
                 verify=False
@@ -276,6 +275,10 @@ def generate_content():
             if not title or not body:
                 continue
 
+            # Принудительно меняем заголовок для рейтинга
+            if is_rating:
+                title = "5 популярных аниме, которые стоит посмотреть"
+
             rating_markers = re.search(r'(?:🥇|🥈|🥉|\d+\.)\s', body)
             if rating_markers:
                 body = fix_rating_format(body)
@@ -289,14 +292,12 @@ def generate_content():
                 print("В сгенерированном тексте нет конкретных названий")
                 continue
 
-            # Проверяем на повторы
             new_anime = extract_anime_names(body)
             if new_anime & used_anime:
                 print("Найдены повторяющиеся аниме, пробуем ещё раз")
                 used_list = ', '.join(sorted(new_anime | used_anime))
                 continue
 
-            # Сохраняем использованные названия
             save_used_anime(used_anime | new_anime)
 
             return title, body
