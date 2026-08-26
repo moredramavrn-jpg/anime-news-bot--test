@@ -605,11 +605,23 @@ def remove_duplicate_start(title, body):
         body_clean = body_clean[len(title_clean):].lstrip('.,;:!? ')
         if not body_clean:
             return ""
-    # Если первое предложение содержит заголовок, удаляем его
     sentences = re.split(r'(?<=[.!?])\s+', body_clean)
     if sentences and title_clean.lower() in sentences[0].lower():
         body_clean = ' '.join(sentences[1:]).strip()
     return body_clean
+
+def make_title_from_text(text):
+    """
+    Создаёт заголовок из первого предложения текста.
+    """
+    if not text:
+        return "", ""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    if not sentences:
+        return text, ""
+    first = sentences[0].strip()
+    rest = ' '.join(sentences[1:]).strip()
+    return first, rest
 
 def rewrite_news(title, body):
     if not GIGACHAT_AUTHORIZATION_KEY:
@@ -677,7 +689,6 @@ def rewrite_news(title, body):
         new_body = fix_punctuation_spaces(new_body)
         new_body = remove_garbage_lines(new_body)
 
-        # Убираем дублирование заголовка в начале текста
         new_body = remove_duplicate_start(new_title, new_body)
 
         if new_title and new_body:
@@ -852,6 +863,13 @@ def main():
         if name_pairs:
             title = replace_anime_names(title, name_pairs)
             full_text = replace_anime_names(full_text, name_pairs)
+
+        # Для Shikimori: делаем заголовок из первого предложения текста
+        if full_text:
+            new_title, new_body = make_title_from_text(full_text)
+            if new_title:
+                title = new_title
+                full_text = new_body
 
         try:
             send_post(title, full_text, link, image_url, video_url, is_youtube)
