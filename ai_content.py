@@ -192,9 +192,8 @@ def generate_content():
     topic = CONTENT_PLAN.get(weekday, "🎯 Подборка аниме")
 
     used_anime = load_used_anime()
-    used_list = ', '.join(sorted(used_anime)) if used_anime else ""
 
-    for attempt in range(3):
+    for attempt in range(5):
         is_rating = "Рейтинг" in topic or "Топ-5" in topic
 
         if is_rating:
@@ -213,8 +212,7 @@ def generate_content():
 Названия обязательно в кавычках «».
 Не выдумывай названия. Только реальные аниме.
 Не задавай вопросы, не пиши вводные слова.
-
-{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {used_list}.' if used_list else ''}
+{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {", ".join(sorted(used_anime))}.' if used_anime else ''}
 
 Выведи результат строго в формате:
 Заголовок: 5 популярных аниме, которые стоит посмотреть
@@ -234,7 +232,7 @@ def generate_content():
 - Запрещены фразы "И что это...", "Как думаете...", "Непонятно...", "Впрочем...".
 - Разбей текст на 3-4 абзаца, каждый по 2-3 предложения.
 - Добавь в начало каждого абзаца подходящий эмодзи.
-{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {used_list}.' if used_list else ''}
+{f'НЕ ИСПОЛЬЗУЙ ЭТИ АНИМЕ: {", ".join(sorted(used_anime))}.' if used_anime else ''}
 
 Выведи результат строго в формате:
 Заголовок: <заголовок поста>
@@ -256,7 +254,7 @@ def generate_content():
                         {"role": "system", "content": system_msg},
                         {"role": "user", "content": prompt}
                     ],
-                    "temperature": 0.7,
+                    "temperature": 0.8,
                     "max_tokens": 1200 if is_rating else 1000
                 },
                 timeout=30,
@@ -275,7 +273,6 @@ def generate_content():
             if not title or not body:
                 continue
 
-            # Принудительно меняем заголовок для рейтинга
             if is_rating:
                 title = "5 популярных аниме, которые стоит посмотреть"
 
@@ -295,18 +292,17 @@ def generate_content():
             new_anime = extract_anime_names(body)
             if new_anime & used_anime:
                 print("Найдены повторяющиеся аниме, пробуем ещё раз")
-                used_list = ', '.join(sorted(new_anime | used_anime))
+                used_anime.update(new_anime)
                 continue
 
             save_used_anime(used_anime | new_anime)
-
             return title, body
 
         except Exception as e:
             print(f"Ошибка генерации контента: {e}")
             return None
 
-    print("Не удалось сгенерировать контент после нескольких попыток")
+    print("Не удалось избежать повторов")
     return None
 
 def send_content_post(title, body):
