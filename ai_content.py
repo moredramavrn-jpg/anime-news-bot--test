@@ -160,8 +160,10 @@ def format_cards(text):
             emoji = m.group(1)
             name = m.group(2)
             desc = m.group(3)
-            desc = desc[0].upper() + desc[1:] if desc else desc
-            card = f"{emoji} <b>{name}</b>\n{desc}"
+            # Приводим первую букву описания к нижнему регистру
+            if desc:
+                desc = desc[0].lower() + desc[1:]
+            card = f"{emoji} <b>{name}</b> - {desc}"
             if idx < len(items) - 1:
                 card += "\n────────────────"
             cards.append(card)
