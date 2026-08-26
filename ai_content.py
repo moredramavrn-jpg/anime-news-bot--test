@@ -161,13 +161,14 @@ def format_cards(text):
             name = m.group(2)
             desc = m.group(3)
             desc = desc[0].upper() + desc[1:] if desc else desc
-            card = f"{emoji} <b>{name}</b>\n{desc}"
+            # Объединяем название и описание в одну строку
+            card = f"{emoji} <b>{name}</b> — {desc}"
             if idx < len(items) - 1:
                 card += "\n────────────────"
             cards.append(card)
         else:
             cards.append(item)
-    return '\n'.join(cards)   # без лишних пустых строк между карточками
+    return '\n'.join(cards)
 
 def generate_top_5():
     all_anime = load_top_anime()
