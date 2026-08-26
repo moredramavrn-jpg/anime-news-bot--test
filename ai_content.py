@@ -160,10 +160,10 @@ def format_cards(text):
             emoji = m.group(1)
             name = m.group(2)
             desc = m.group(3)
-            # Приводим первую букву описания к нижнему регистру
+            # Первая буква описания с большой буквы
             if desc:
-                desc = desc[0].lower() + desc[1:]
-            card = f"{emoji} <b>{name}</b> - {desc}"
+                desc = desc[0].upper() + desc[1:]
+            card = f"{emoji} <b>{name}</b>\n{desc}"
             if idx < len(items) - 1:
                 card += "\n────────────────"
             cards.append(card)
@@ -192,7 +192,7 @@ def generate_top_5():
         print("Не удалось получить токен GigaChat")
         return None
 
-    prompt = f"""Составь топ-5 аниме, которые стоит посмотреть, используя только эти названия: {anime_list}.
+    prompt = f"""Составь подборку из 5 аниме, которые стоит посмотреть, используя только эти названия: {anime_list}.
 
 Формат строго:
 🥇 «Название аниме» — описание из 2-3 предложений.
@@ -208,10 +208,10 @@ def generate_top_5():
 Не задавай вопросы, не пиши вводные слова.
 
 Выведи результат строго в формате:
-Заголовок: 5 аниме, которые стоит посмотреть
-Текст: <текст топа>
+Заголовок: аниме, которые стоит посмотреть
+Текст: <текст подборки>
 """
-    system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме только из предоставленного списка названий."
+    system_msg = "Ты — редактор аниме-канала. Ты составляешь подборки только из предоставленного списка названий."
 
     for attempt in range(3):
         try:
@@ -272,7 +272,7 @@ def generate_top_5():
 def send_content_post(title, body):
     header = "✨ <b>Рубрика: аниме, которые стоит посмотреть</b>"
     cards = format_cards(body)
-    message = f"{header}\n\n{cards}\n\n#аниме #новости"
+    message = f"{header}\n\n{cards}\n\n#аниме #рекомендации #чтопосмотреть"
     try:
         bot.send_message(CHANNEL_ID, message, parse_mode='HTML', disable_web_page_preview=True)
         print("Контент-пост опубликован.")
