@@ -56,7 +56,6 @@ def load_used_anime():
         return {line.strip().lower() for line in f if line.strip()}
 
 def save_used_anime(anime_set):
-    # Сохраняем все, но можно ограничить последними 200
     anime_list = list(anime_set)[-200:]
     with open(USED_ANIME_FILE, 'w', encoding='utf-8') as f:
         for name in anime_list:
@@ -152,7 +151,7 @@ def generate_unique_top():
     used_anime = load_used_anime()
 
     while True:
-        system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме, используя официальные русские названия, и избегаешь уже использованных."
+        system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме, используя ТОЛЬКО официальные русские названия и НИКОГДА не используешь аниме из списка запрещённых."
         prompt = f"""Составь топ-5 аниме, которые стоит посмотреть.
 Формат строго:
 🥇 «Название аниме» — описание из 2-3 предложений.
@@ -226,10 +225,9 @@ def generate_unique_top():
             new_anime = extract_anime_names(body)
             if new_anime & used_anime:
                 print("Найдены повторяющиеся аниме, пробуем снова")
-                used_anime.update(new_anime)  # добавляем, чтобы в следующий раз точно не повторить
+                used_anime.update(new_anime)
                 continue
 
-            # Уникальный набор получен
             save_used_anime(used_anime | new_anime)
             return title, body
 
