@@ -16,7 +16,6 @@ LINK:https://kg-portal.ru/comments/134673-tri-killera-pokazyvajut-navyki-v-zreli
 LINK:https://kg-portal.ru/comments/134628-anime-atele-koldovskih-kolpakov-poluchilo-premiju-astra-tv-awards-gollivudskogo-tvorcheskogo-aljansa/
 LINK:https://shikimori.io/forum/news/642336-data-premiery-tetsuryou-meet-with-tetsudou-musume
 LINK:https://www.goha.ru/pervye-desyat-tomov-obeshhannoj-strany-grez-v-polnom-cvete-vyjdut-4-sentyabrya-2026-goda-d72AmX
-LINK:https://shikimori.io/forum/news/642228-vo-frantsii-postroyat-tematicheskiy-park-posvyaschyonnyy-dragon-ball
 LINK:https://shikimori.io/forum/news/642337-poster-treyler-i-data-premiery-battle-spirits-re-zekkai-no-kuu
 LINK:https://shikimori.io/forum/news/642088-anime-mii-i-yamada-vyzvalo-opaseniya-u-organizatsii-podderzhki-lyudey-s-intellektualnoy-invalidnostyu
 LINK:https://shikimori.io/forum/news/642339-poster-i-treyler-2-sezona-ao-no-hako
@@ -26,15 +25,3 @@ LINK:https://shikimori.io/forum/news/642341-10-letie-filma-kimi-no-na-wa-i-vyhod
 LINK:https://shikimori.io/forum/news/642340-data-premiery-juuou-mujin-dandivine
 LINK:https://www.goha.ru/sozdateli-anime-cyberpunk-edgerunners-2-predstavili-novyj-trejler-i-nazvali-datu-vyhoda-v-efir-dDmpVN
 LINK:https://shikimori.io/forum/contests/contest-184-luchshee-anime-zimnego-sezona-2026/642126-zavershenie-turnira
-TITLE:датапремьерыtetsuryoumeetwithtetsudoumusume
-TITLE:первыйтрейлерпостериподробностианимебронированныевоинывотомысераяведьма
-TITLE:постеридатапремьерыkashitamaryokuwarevobaraidekyouseichoushuu
-TITLE:вофранциипострояттематическийпаркпосвящённыйdragonball
-TITLE:датапремьерыjuuoumujindandivine
-TITLE:мрачныйлондонxviiвекаиместьмизувышелтизертрейлерпродолженияанимеblueeyesamuraiиназванадатарелиза
-TITLE:постеритрейлер2сезонаaonohako
-TITLE:завершениетурнира
-TITLE:постертрейлеридатапремьерыbattlespiritsrezekkainokuu
-TITLE:анимемиииямадавызвалоопасенияуорганизацииподдержкилюдейсинтеллектуальнойинвалидностью
-TITLE:постеритрейлер4госезонаtokyorevengers
-TITLE:10летиефильмаkiminonawaивыход4кремастера
