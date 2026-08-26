@@ -161,8 +161,7 @@ def format_cards(text):
             name = m.group(2)
             desc = m.group(3)
             desc = desc[0].upper() + desc[1:] if desc else desc
-            # Объединяем название и описание в одну строку
-            card = f"{emoji} <b>{name}</b> — {desc}"
+            card = f"{emoji} <b>{name}</b>\n{desc}"
             if idx < len(items) - 1:
                 card += "\n────────────────"
             cards.append(card)
@@ -207,7 +206,7 @@ def generate_top_5():
 Не задавай вопросы, не пиши вводные слова.
 
 Выведи результат строго в формате:
-Заголовок: 5 популярных аниме, которые стоит посмотреть
+Заголовок: 5 аниме, которые стоит посмотреть
 Текст: <текст топа>
 """
     system_msg = "Ты — редактор аниме-канала. Ты составляешь топ-5 аниме только из предоставленного списка названий."
@@ -269,7 +268,7 @@ def generate_top_5():
     return None
 
 def send_content_post(title, body):
-    header = "✨ <b>Рубрика: пять популярных аниме, которые стоит посмотреть</b>"
+    header = "✨ <b>Рубрика: аниме, которые стоит посмотреть</b>"
     cards = format_cards(body)
     message = f"{header}\n\n{cards}\n\n#аниме #новости"
     try:
