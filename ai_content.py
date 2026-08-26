@@ -212,12 +212,14 @@ def generate_recommendations():
         status_str = status if status and status != "неизвестно" else "статус неизвестен"
 
         meta = f"{genres_str}, {episodes_str}, {status_str}"
+        meta = meta.capitalize()   # первая буква заглавная
 
         emoji = ITEM_EMOJI[idx % len(ITEM_EMOJI)]
 
         # НОВЫЙ ФОРМАТ:
-        # эмодзи «Название» — описание [метаданные жирным]
-        card = f"{emoji} <b>«{name}»</b> — {desc} <b>[{meta}]</b>"
+        # первая строка: эмодзи «Название» — описание
+        # вторая строка: [метаданные] жирным
+        card = f"{emoji} <b>«{name}»</b> — {desc}\n<b>[{meta}]</b>"
         if idx < len(chosen) - 1:
             card += "\n────────────────"
         cards.append(card)
