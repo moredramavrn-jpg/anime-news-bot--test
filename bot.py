@@ -107,6 +107,18 @@ def get_page_soup(url):
         print(f"Ошибка загрузки {url}: {e}")
         return None
 
+def extract_russian_anime_name(soup):
+    """
+    Извлекает русское название аниме со страницы новости Shikimori.
+    Возвращает строку или None.
+    """
+    if not soup:
+        return None
+    name_ru_elem = soup.select_one('span.name-ru')
+    if name_ru_elem:
+        return name_ru_elem.get_text(strip=True)
+    return None
+
 def extract_full_text_from_page(soup):
     if not soup:
         return ""
@@ -814,6 +826,12 @@ def main():
         full_text = fetch_full_text({'link': link, 'title': title})
         image_url = news.get('image_url')
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
+
+        # Подменяем английское название на русское, если найдено
+        russian_name = extract_russian_anime_name(soup)
+        if russian_name:
+            # Заменяем первое вхождение текста в кавычках на русское название
+            title = re.sub(r'«[^»]+»', f'«{russian_name}»', title, count=1)
 
         try:
             send_post(title, full_text, link, image_url, video_url, is_youtube)
