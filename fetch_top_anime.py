@@ -6,7 +6,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 TOP_ANIME_FILE = "top_anime.txt"
+POPULAR_ANIME_FILE = "popular_anime.txt"
+EXCLUDE_FILE = "exclude.txt"   # файл с названиями для исключения (если нужен)
 MAX_ANIME = 2000
+MAX_POPULAR = 150              # количество популярных аниме для загадок
 TOTAL_PAGES = 80
 LIMIT_PER_PAGE = 50
 
@@ -40,21 +43,29 @@ def requests_retry_session(
     session.mount("https://", adapter)
     return session
 
-def clean_title(title):
+def load_exclude_list():
+    exclude = set()
+    if os.path.exists(EXCLUDE_FILE):
+        with open(EXCLUDE_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                name = line.strip().lower()
+                if name:
+                    exclude.add(name)
+    return exclude
+
+def clean_title(title, exclude_set):
     if not title:
         return None
 
-    # Убираем подзаголовки после двоеточия, длинного тире и т.п.
     for sep in [':', '—', ' - ', ' – ']:
         if sep in title:
             title = title.split(sep)[0].strip()
             break
 
-    # Убираем номер сезона/сиквела в конце (арабские цифры)
+    # убираем номер сезона/сиквела в конце (арабские цифры)
     title = re.sub(r'(\s|-)\d+$', '', title).strip()
 
-    # Убираем римские цифры в конце (I, II, III, IV, V, VI, VII, VIII, IX, X и т.д.)
-    # Паттерн покрывает корректные римские числа до нескольких тысяч
+    # убираем римские цифры в конце
     title = re.sub(
         r'(?:\s|-)M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
         '',
@@ -62,10 +73,16 @@ def clean_title(title):
         flags=re.IGNORECASE
     ).strip()
 
+    # убираем обозначения кроссоверов/спецвыпусков
+    title = re.sub(r'\s*[xх]\s*UT\s*$', '', title, flags=re.IGNORECASE).strip()
+
     if len(title) < 2:
         return None
 
     lower = title.lower()
+    if lower in exclude_set:
+        return None
+
     for bad in BAD_SUBSTRINGS:
         if bad in lower:
             return None
@@ -73,7 +90,7 @@ def clean_title(title):
     title = ' '.join(title.split())
     return title
 
-def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
+def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE, exclude_set=None):
     names = []
     session = requests_retry_session()
     url = "https://shikimori.one/api/animes"
@@ -86,6 +103,9 @@ def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
         "page": 1,
     }
 
+    if exclude_set is None:
+        exclude_set = set()
+
     for page in range(1, total_pages + 1):
         params["page"] = page
         try:
@@ -97,7 +117,7 @@ def fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE):
                 break
             for anime in data:
                 name = anime.get("russian") or anime.get("english") or anime.get("name")
-                name = clean_title(name)
+                name = clean_title(name, exclude_set)
                 if name:
                     names.append(name)
             print(f"Shikimori: получена страница {page} ({len(data)} записей)")
@@ -124,11 +144,33 @@ def save_to_file(names):
             f.write(name + '\n')
     print(f"Сохранено {len(unique)} аниме в {TOP_ANIME_FILE}")
 
+def save_popular(names, max_popular=MAX_POPULAR):
+    """Сохраняет первые max_popular названий (по рейтингу Shikimori)."""
+    unique = []
+    seen = set()
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(name)
+            if len(unique) >= max_popular:
+                break
+
+    with open(POPULAR_ANIME_FILE, 'w', encoding='utf-8') as f:
+        for name in unique:
+            f.write(name + '\n')
+    print(f"Сохранено {len(unique)} популярных аниме в {POPULAR_ANIME_FILE}")
+
 def main():
+    exclude_set = load_exclude_list()
+    print(f"Загружено исключений: {len(exclude_set)}")
+
     print(f"=== Сбор с Shikimori (до {TOTAL_PAGES} страниц) ===")
-    names = fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE)
+    names = fetch_shikimori_released(total_pages=TOTAL_PAGES, limit=LIMIT_PER_PAGE, exclude_set=exclude_set)
     print(f"Shikimori: собрано {len(names)} названий до дедупликации")
-    save_to_file(names)
+
+    save_to_file(names)      # полный список
+    save_popular(names)      # первые популярные
 
 if __name__ == "__main__":
     main()
