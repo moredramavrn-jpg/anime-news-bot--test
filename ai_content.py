@@ -152,27 +152,20 @@ def has_anime_titles(text):
     return False
 
 def format_cards(text):
-    """
-    Преобразует каждый пункт топа в карточку с рамками.
-    """
     items = [p.strip() for p in text.split('\n\n') if p.strip()]
     cards = []
-    for item in items:
-        # Ищем маркер, название в кавычках и описание после тире
+    for idx, item in enumerate(items):
         m = re.match(r'^(🥇|🥈|🥉|💥|🌟)\s*«([^»]+)»\s*—\s*(.*)$', item)
         if m:
             emoji = m.group(1)
             name = m.group(2)
             desc = m.group(3)
-            card = (
-                "┏━━━━━━━━━━━━━━━━┓\n"
-                f"{emoji} <b>«{name}»</b>\n"
-                "┗━━━━━━━━━━━━━━━━┛\n"
-                f"<i>{desc}</i>"
-            )
+            desc = desc[0].upper() + desc[1:] if desc else desc
+            card = f"{emoji} <b>{name}</b>\n{desc}"
+            if idx < len(items) - 1:
+                card += "\n────────────────"
             cards.append(card)
         else:
-            # Если не удалось распарсить, оставляем как есть
             cards.append(item)
     return '\n\n'.join(cards)
 
@@ -276,9 +269,8 @@ def generate_top_5():
 
 def send_content_post(title, body):
     header = "✨ <b>Рубрика: пять популярных аниме, которые стоит посмотреть</b>"
-    separator = "┄┄┄ ✦ ┄┄┄"
     cards = format_cards(body)
-    message = f"{header}\n{separator}\n\n{cards}\n\n#аниме #новости"
+    message = f"{header}\n\n{cards}\n\n#аниме #новости"
     try:
         bot.send_message(CHANNEL_ID, message, parse_mode='HTML', disable_web_page_preview=True)
         print("Контент-пост опубликован.")
