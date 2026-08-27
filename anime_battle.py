@@ -51,9 +51,6 @@ def get_gigachat_token():
         return None
 
 def get_russian_name(text):
-    """
-    Находит официальное русское название аниме или устоявшееся имя персонажа.
-    """
     print(f"Ищу русское название для: {text}")
 
     if not GIGACHAT_AUTHORIZATION_KEY:
@@ -185,8 +182,9 @@ def send_battle(char1, char2, collage_bytes):
     caption = (
         f"⚔️ <b>Аниме-баттл!</b>\n\n"
         f"Сегодня сражаются:\n\n"
-        f"🔥 <b>{name1}</b> из аниме «{anime1}»\n"
-        f"⚡ <b>{name2}</b> из аниме «{anime2}»\n\n"
+        f"<b>─── {name1}</b> (<i>{anime1}</i>)\n"
+        f"<b>VS</b>\n"
+        f"<b>─── {name2}</b> (<i>{anime2}</i>)\n\n"
         f"Кто победит? Голосуйте реакциями:\n"
         f"👍 — за {name1}\n"
         f"🔥 — за {name2}\n\n"
