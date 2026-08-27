@@ -183,7 +183,7 @@ def send_battle(char1, char2, collage_bytes):
         f"⚔️ <b>Аниме-баттл!</b>\n\n"
         f"Сегодня сражаются:\n\n"
         f"<b>─── {name1}</b> (<i>{anime1}</i>)\n"
-        f"<b>VS</b>\n"
+        f" <b>🆚</b>\n"
         f"<b>─── {name2}</b> (<i>{anime2}</i>)\n\n"
         f"Кто победит? Голосуйте реакциями:\n"
         f"👍 — за {name1}\n"
