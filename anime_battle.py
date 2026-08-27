@@ -54,11 +54,15 @@ def get_russian_name(text):
     """
     Находит официальное русское название аниме или устоявшееся имя персонажа.
     """
+    print(f"Ищу русское название для: {text}")
+
     if not GIGACHAT_AUTHORIZATION_KEY:
+        print("GigaChat: нет ключа авторизации")
         return text
 
     token = get_gigachat_token()
     if not token:
+        print("GigaChat: не удалось получить токен")
         return text
 
     prompt = (
@@ -92,6 +96,7 @@ def get_russian_name(text):
         response.raise_for_status()
         data = response.json()
         russian = data["choices"][0]["message"]["content"].strip()
+        print(f"Получено: {russian}")
         if russian and russian.lower() != text.lower():
             return russian
     except Exception as e:
@@ -171,7 +176,7 @@ def create_collage(img1_bytes, img2_bytes):
         return None
 
 def send_battle(char1, char2, collage_bytes):
-    # Получаем русские названия/имена
+    print("Получаю русские названия...")
     name1 = get_russian_name(char1['name'])
     anime1 = get_russian_name(char1['anime'])
     name2 = get_russian_name(char2['name'])
