@@ -82,7 +82,13 @@ def create_collage(img1_bytes, img2_bytes):
 
         # Рисуем "VS"
         draw = ImageDraw.Draw(collage)
-        font = ImageFont.truetype("arial.ttf", 100)
+        try:
+            # В Ubuntu обычно есть DejaVuSans
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 100)
+        except:
+            # Fallback на стандартный шрифт Pillow
+            font = ImageFont.load_default()
+
         text = "VS"
         text_bbox = draw.textbbox((0, 0), text, font=font)
         text_width = text_bbox[2] - text_bbox[0]
