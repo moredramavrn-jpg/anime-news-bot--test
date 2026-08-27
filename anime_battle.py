@@ -12,17 +12,86 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 CHARACTERS_FILE = "characters.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+gigachat_access_token = None
+gigachat_token_expires_at = 0
+
+def get_gigachat_token():
+    global gigachat_access_token, gigachat_token_expires_at
+
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
+    try:
+        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
+        r.raise_for_status()
+        token_data = r.json()
+        gigachat_access_token = token_data.get("access_token")
+        expires_at = token_data.get("expires_at")
+        if expires_at:
+            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+        else:
+            gigachat_token_expires_at = time.time() + 1800
+        return gigachat_access_token
+    except Exception as e:
+        print(f"Ошибка получения токена GigaChat: {e}")
+        return None
+
+def translate_text(text):
+    """Переводит текст на русский через GigaChat."""
+    if not GIGACHAT_AUTHORIZATION_KEY:
+        return text
+
+    token = get_gigachat_token()
+    if not token:
+        return text
+
+    prompt = f"Переведи на русский язык: {text}. Выведи только перевод."
+    try:
+        response = requests.post(
+            "https://api.giga.chat/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "X-Request-ID": str(uuid.uuid4()),
+                "X-Session-ID": str(uuid.uuid4()),
+                "User-Agent": "AnimeBattleBot/1.0"
+            },
+            json={
+                "model": "GigaChat-3-Ultra",
+                "messages": [
+                    {"role": "system", "content": "Ты — переводчик."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 200
+            },
+            timeout=30,
+            verify=False
+        )
+        response.raise_for_status()
+        data = response.json()
+        translated = data["choices"][0]["message"]["content"].strip()
+        if translated:
+            return translated
+    except Exception as e:
+        print(f"Ошибка перевода: {e}")
+    return text
+
 def load_characters():
-    """
-    Загружает список персонажей из файла characters.txt.
-    Формат строки: Имя|Аниме|URL_картинки
-    Возвращает список словарей.
-    """
     if not os.path.exists(CHARACTERS_FILE):
         print(f"Файл {CHARACTERS_FILE} не найден")
         return []
@@ -44,7 +113,6 @@ def load_characters():
     return characters
 
 def download_image(url):
-    """Скачивает изображение по URL и возвращает BytesIO."""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -57,36 +125,26 @@ def download_image(url):
         return None
 
 def create_collage(img1_bytes, img2_bytes):
-    """
-    Создаёт коллаж из двух изображений с текстом "VS" между ними.
-    Возвращает BytesIO с готовым JPEG.
-    """
     try:
         img1 = Image.open(img1_bytes)
         img2 = Image.open(img2_bytes)
 
-        # Приводим к одинаковой высоте (например, 600px)
         height = 600
         img1 = img1.resize((int(img1.width * height / img1.height), height))
         img2 = img2.resize((int(img2.width * height / img2.height), height))
 
-        # Ширина коллажа = ширина 1 + ширина 2 + пространство под "VS"
         vs_space = 150
         collage_width = img1.width + img2.width + vs_space
         collage_height = height
 
-        # Белый фон
         collage = Image.new("RGB", (collage_width, collage_height), "white")
         collage.paste(img1, (0, 0))
         collage.paste(img2, (img1.width + vs_space, 0))
 
-        # Рисуем "VS"
         draw = ImageDraw.Draw(collage)
         try:
-            # В Ubuntu обычно есть DejaVuSans
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 100)
         except:
-            # Fallback на стандартный шрифт Pillow
             font = ImageFont.load_default()
 
         text = "VS"
@@ -97,7 +155,6 @@ def create_collage(img1_bytes, img2_bytes):
         text_y = (collage_height - text_height) // 2
         draw.text((text_x, text_y), text, fill="black", font=font)
 
-        # Сохраняем в BytesIO
         output = BytesIO()
         collage.save(output, format="JPEG")
         output.seek(0)
@@ -107,15 +164,20 @@ def create_collage(img1_bytes, img2_bytes):
         return None
 
 def send_battle(char1, char2, collage_bytes):
-    """Отправляет пост с коллажем и подписью."""
+    # Переводим имена и названия аниме
+    name1 = translate_text(char1['name'])
+    anime1 = translate_text(char1['anime'])
+    name2 = translate_text(char2['name'])
+    anime2 = translate_text(char2['anime'])
+
     caption = (
         f"⚔️ <b>Аниме-баттл!</b>\n\n"
         f"Сегодня сражаются:\n\n"
-        f"🔥 <b>{char1['name']}</b> из аниме «{char1['anime']}»\n"
-        f"⚡ <b>{char2['name']}</b> из аниме «{char2['anime']}»\n\n"
+        f"🔥 <b>{name1}</b> из аниме «{anime1}»\n"
+        f"⚡ <b>{name2}</b> из аниме «{anime2}»\n\n"
         f"Кто победит? Голосуйте реакциями:\n"
-        f"👍 — за {char1['name']}\n"
-        f"🔥 — за {char2['name']}\n\n"
+        f"👍 — за {name1}\n"
+        f"🔥 — за {name2}\n\n"
         f"#аниме #баттл #голосование"
     )
     try:
@@ -125,7 +187,7 @@ def send_battle(char1, char2, collage_bytes):
             caption=caption,
             parse_mode='HTML'
         )
-        print(f"Баттл опубликован: {char1['name']} vs {char2['name']}")
+        print(f"Баттл опубликован: {name1} vs {name2}")
     except Exception as e:
         print(f"Ошибка отправки баттла: {e}")
 
@@ -135,10 +197,8 @@ def main():
         print("Недостаточно персонажей для баттла (нужно минимум 2)")
         return
 
-    # Выбираем двух случайных разных персонажей
     char1, char2 = random.sample(characters, 2)
 
-    # Скачиваем изображения
     print(f"Скачиваю изображение для {char1['name']}...")
     img1_bytes = download_image(char1['image_url'])
     if not img1_bytes:
@@ -151,14 +211,12 @@ def main():
         print("Не удалось скачать второе изображение")
         return
 
-    # Создаём коллаж
     print("Создаю коллаж...")
     collage_bytes = create_collage(img1_bytes, img2_bytes)
     if not collage_bytes:
         print("Не удалось создать коллаж")
         return
 
-    # Отправляем
     send_battle(char1, char2, collage_bytes)
 
 if __name__ == "__main__":
