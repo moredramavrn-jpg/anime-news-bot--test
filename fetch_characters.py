@@ -4,7 +4,7 @@ import os
 
 CHARACTERS_FILE = "characters.txt"
 JIKAN_URL = "https://api.jikan.moe/v4/top/characters"
-LIMIT = 100   # сколько персонажей сохранить
+LIMIT = 500   # сколько персонажей сохранить
 
 def fetch_characters():
     characters = []
