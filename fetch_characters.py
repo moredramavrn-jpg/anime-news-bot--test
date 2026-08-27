@@ -1,43 +1,81 @@
 import requests
-import time
 import os
 
 CHARACTERS_FILE = "characters.txt"
-JIKAN_URL = "https://api.jikan.moe/v4/top/characters"
-LIMIT = 500   # сколько персонажей сохранить
+LIMIT = 100  # сколько персонажей сохранить
 
-def fetch_characters():
+ANILIST_API = "https://graphql.anilist.co"
+
+QUERY = """
+query ($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    characters(sort: FAVOURITES_DESC) {
+      name {
+        full
+      }
+      media(sort: POPULARITY_DESC, type: ANIME) {
+        edges {
+          node {
+            title {
+              romaji
+              english
+            }
+          }
+        }
+      }
+      image {
+        large
+      }
+    }
+  }
+}
+"""
+
+def fetch_characters_from_anilist():
     characters = []
     page = 1
     while len(characters) < LIMIT:
-        params = {
+        variables = {
             "page": page,
-            "limit": min(25, LIMIT - len(characters))
+            "perPage": min(50, LIMIT - len(characters))
         }
         try:
-            r = requests.get(JIKAN_URL, params=params, timeout=15)
+            r = requests.post(
+                ANILIST_API,
+                json={"query": QUERY, "variables": variables},
+                timeout=20
+            )
             r.raise_for_status()
             data = r.json()
-            for item in data.get("data", []):
-                name = item.get("name")
-                # Ищем первое аниме, в котором участвует персонаж
+            if "errors" in data:
+                print(f"Ошибки AniList: {data['errors']}")
+                break
+
+            items = data.get("data", {}).get("Page", {}).get("characters", [])
+            if not items:
+                break
+
+            for ch in items:
+                name = ch.get("name", {}).get("full", "")
                 anime_name = ""
-                if item.get("anime") and len(item["anime"]) > 0:
-                    anime_name = item["anime"][0]["anime"]["title"]
-                image_url = item.get("images", {}).get("jpg", {}).get("image_url", "")
+                media_edges = ch.get("media", {}).get("edges", [])
+                if media_edges:
+                    node = media_edges[0].get("node", {})
+                    title = node.get("title", {})
+                    anime_name = title.get("english") or title.get("romaji") or ""
+                image_url = ch.get("image", {}).get("large", "")
                 if name and image_url:
                     characters.append({
                         "name": name,
                         "anime": anime_name,
                         "image_url": image_url
                     })
-            if not data.get("data"):
-                break
-            page += 1
-            time.sleep(1)   # Jikan ограничивает запросы
         except Exception as e:
-            print(f"Ошибка получения персонажей: {e}")
+            print(f"Ошибка получения персонажей с AniList: {e}")
             break
+
+        page += 1
+
     return characters[:LIMIT]
 
 def save_characters(characters):
@@ -47,8 +85,8 @@ def save_characters(characters):
     print(f"Сохранено {len(characters)} персонажей в {CHARACTERS_FILE}")
 
 def main():
-    print("Получаю популярных персонажей с Jikan...")
-    chars = fetch_characters()
+    print("Получаю популярных персонажей с AniList...")
+    chars = fetch_characters_from_anilist()
     if chars:
         save_characters(chars)
     else:
