@@ -50,8 +50,10 @@ def get_gigachat_token():
         print(f"Ошибка получения токена GigaChat: {e}")
         return None
 
-def translate_text(text):
-    """Переводит текст на русский через GigaChat."""
+def get_russian_name(text):
+    """
+    Находит официальное русское название аниме или устоявшееся имя персонажа.
+    """
     if not GIGACHAT_AUTHORIZATION_KEY:
         return text
 
@@ -59,7 +61,12 @@ def translate_text(text):
     if not token:
         return text
 
-    prompt = f"Переведи на русский язык: {text}. Выведи только перевод."
+    prompt = (
+        f"Найди официальное русское название (или устоявшееся в русскоязычном аниме-сообществе) для: «{text}».\n"
+        "Если это имя персонажа, верни его так, как его обычно пишут по-русски (например, 'Eren Yeager' -> 'Эрен Йегер').\n"
+        "Если это название аниме, верни русское название (например, 'Attack on Titan' -> 'Атака титанов').\n"
+        "Выведи только итоговое русское название/имя без пояснений."
+    )
     try:
         response = requests.post(
             "https://api.giga.chat/v1/chat/completions",
@@ -73,10 +80,10 @@ def translate_text(text):
             json={
                 "model": "GigaChat-3-Ultra",
                 "messages": [
-                    {"role": "system", "content": "Ты — переводчик."},
+                    {"role": "system", "content": "Ты — эксперт по аниме и знаешь официальные русские названия и имена."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3,
+                "temperature": 0.2,
                 "max_tokens": 200
             },
             timeout=30,
@@ -84,11 +91,11 @@ def translate_text(text):
         )
         response.raise_for_status()
         data = response.json()
-        translated = data["choices"][0]["message"]["content"].strip()
-        if translated:
-            return translated
+        russian = data["choices"][0]["message"]["content"].strip()
+        if russian and russian.lower() != text.lower():
+            return russian
     except Exception as e:
-        print(f"Ошибка перевода: {e}")
+        print(f"Ошибка получения русского названия: {e}")
     return text
 
 def load_characters():
@@ -164,11 +171,11 @@ def create_collage(img1_bytes, img2_bytes):
         return None
 
 def send_battle(char1, char2, collage_bytes):
-    # Переводим имена и названия аниме
-    name1 = translate_text(char1['name'])
-    anime1 = translate_text(char1['anime'])
-    name2 = translate_text(char2['name'])
-    anime2 = translate_text(char2['anime'])
+    # Получаем русские названия/имена
+    name1 = get_russian_name(char1['name'])
+    anime1 = get_russian_name(char1['anime'])
+    name2 = get_russian_name(char2['name'])
+    anime2 = get_russian_name(char2['anime'])
 
     caption = (
         f"⚔️ <b>Аниме-баттл!</b>\n\n"
