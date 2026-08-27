@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # получаем всю историю для корректного pull --rebase
 
       - uses: actions/setup-python@v5
         with:
@@ -37,5 +39,6 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update used_anime.txt"
-            git push
+            git pull --rebase --autostash origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
           fi
