@@ -6,6 +6,7 @@ import urllib3
 import telebot
 from io import BytesIO
 from bs4 import BeautifulSoup
+from PIL import Image
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -127,6 +128,21 @@ def download_media(url):
         print(f"Ошибка скачивания: {e}")
         return None
 
+def compress_image(image_bytes, max_width=1280):
+    try:
+        img = Image.open(image_bytes)
+        if img.width > max_width:
+            ratio = max_width / img.width
+            new_height = int(img.height * ratio)
+            img = img.resize((max_width, new_height), Image.LANCZOS)
+        output = BytesIO()
+        img.save(output, format="JPEG", quality=90)
+        output.seek(0)
+        return output
+    except Exception as e:
+        print(f"Ошибка сжатия: {e}")
+        return image_bytes
+
 def main():
     posted_ids = load_posted_ids()
     all_posts = []
@@ -159,10 +175,19 @@ def main():
         return
 
     if post["type"] == "video":
-        bot.send_video(CHANNEL_ID, media_bytes, caption="#аниме #мем")
+        try:
+            bot.send_video(CHANNEL_ID, media_bytes, caption="#аниме #мем", timeout=60)
+        except Exception as e:
+            print(f"Ошибка отправки видео: {e}")
+            return
     else:
+        compressed = compress_image(media_bytes)
         caption = f"{post['title']}\n\n#аниме #мем"
-        bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
+        try:
+            bot.send_photo(CHANNEL_ID, compressed, caption=caption, timeout=60)
+        except Exception as e:
+            print(f"Ошибка отправки фото: {e}")
+            return
 
     save_posted_id(post["id"])
 
