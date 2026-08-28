@@ -64,7 +64,6 @@ def get_random_anime_image():
       }
     }
     """
-    # Случайная страница от 1 до 50
     page = random.randint(1, 50)
     variables = {"page": page}
     try:
@@ -88,7 +87,7 @@ def generate_meme_text():
     prompt = (
         "Придумай короткую смешную подпись для аниме-мема в стиле чёрного юмора. "
         "Не перегибай с жестью, но и не делай слишком мягко. "
-        "Максимум 10 слов. Без кавычек. Выведи только текст."
+        "Максимум 8 слов. Без кавычек. Выведи только текст."
     )
     headers = {
         "Authorization": f"Bearer {token}",
@@ -117,7 +116,6 @@ def generate_meme_text():
         r.raise_for_status()
         data = r.json()
         text = data["choices"][0]["message"]["content"].strip()
-        # Убираем возможные кавычки
         text = text.strip('«»"')
         return text
     except Exception as e:
@@ -136,47 +134,53 @@ def download_image(url):
         print(f"Ошибка скачивания картинки: {e}")
         return None
 
+def wrap_text(draw, text, font, max_width):
+    """Переносит текст по словам, чтобы он влезал в max_width."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        test = (current + " " + word).strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
 def add_text_to_image(image_bytes, text):
-    """Добавляет текст на картинку снизу."""
+    """Добавляет текст на картинку снизу с переносом по ширине."""
     try:
         img = Image.open(image_bytes).convert("RGB")
         width, height = img.size
 
-        # Создаём область для текста (увеличиваем высоту)
-        text_space = 120
+        # Резервируем место под текст
+        text_space = 160
         new_img = Image.new("RGB", (width, height + text_space), "black")
         new_img.paste(img, (0, 0))
 
         draw = ImageDraw.Draw(new_img)
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
         except:
             font = ImageFont.load_default()
 
-        # Переносим текст, если слишком длинный
-        max_chars = 35
-        if len(text) > max_chars:
-            # Разбиваем на строки
-            words = text.split()
-            lines = []
-            current = ""
-            for word in words:
-                if len(current) + len(word) + 1 <= max_chars:
-                    current = (current + " " + word).strip()
-                else:
-                    lines.append(current)
-                    current = word
-            if current:
-                lines.append(current)
-            text = "\n".join(lines)
+        # Максимальная ширина текста = ширина картинки минус отступы
+        max_text_width = width - 40
+        wrapped = wrap_text(draw, text, font, max_text_width)
 
-        # Рисуем текст по центру
-        text_bbox = draw.multiline_textbbox((0, 0), text, font=font, align="center")
+        # Вычисляем высоту текста
+        text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, align="center")
         text_width = text_bbox[2] - text_bbox[0]
         text_height = text_bbox[3] - text_bbox[1]
+
         x = (width - text_width) // 2
         y = height + (text_space - text_height) // 2
-        draw.text((x, y), text, fill="white", font=font, align="center")
+        draw.multiline_text((x, y), wrapped, fill="white", font=font, align="center")
 
         output = BytesIO()
         new_img.save(output, format="JPEG")
@@ -199,7 +203,6 @@ def send_meme(image_bytes):
         print(f"Ошибка отправки мема: {e}")
 
 def main():
-    # Получаем картинку
     print("Получаю случайную картинку...")
     image_url = get_random_anime_image()
     if not image_url:
@@ -211,19 +214,16 @@ def main():
         print("Не удалось скачать картинку")
         return
 
-    # Генерируем подпись
     print("Генерирую подпись...")
     meme_text = generate_meme_text()
     print(f"Подпись: {meme_text}")
 
-    # Накладываем текст
     print("Накладываю текст...")
     meme_image = add_text_to_image(img_bytes, meme_text)
     if not meme_image:
         print("Не удалось создать мем")
         return
 
-    # Отправляем
     send_meme(meme_image)
 
 if __name__ == "__main__":
