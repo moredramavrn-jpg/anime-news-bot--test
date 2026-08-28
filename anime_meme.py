@@ -119,20 +119,21 @@ def main():
         posts = get_posts_from_series(url)
         all_posts.extend(posts)
 
-    all_posts = [p for p in all_posts if p["id"] not in posted_ids]
-    if not all_posts:
-        print("Нет новых мемов")
-        return
+    # Исключаем опубликованные
+    available = [p for p in all_posts if p["id"] not in posted_ids]
+    if not available:
+        print("Нет новых мемов, начинаем заново")
+        posted_ids.clear()
+        available = all_posts
 
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
 
-    print(f"last_type = {last_type}, desired_type = {desired_type}")
-
-    filtered = [p for p in all_posts if p["type"] == desired_type]
+    # Ищем неопубликованные нужного типа
+    filtered = [p for p in available if p["type"] == desired_type]
     if not filtered:
-        print(f"Нет мемов типа {desired_type}, берём любой")
-        filtered = all_posts  # если нет нужного типа, берём любой
+        print(f"Нет новых мемов типа {desired_type}, берём другой тип")
+        filtered = available  # берём любой тип
 
     post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
@@ -149,7 +150,14 @@ def main():
         bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
 
     save_posted_id(post["id"])
-    save_last_type(post["type"])
+
+    # Обновляем тип только если опубликовали то, что хотели
+    if post["type"] == desired_type:
+        save_last_type(post["type"])
+        print(f"Тип обновлён на {post['type']}")
+    else:
+        print("Тип не обновлён, в следующий раз снова попробуем нужный")
+
     print("Мем опубликован.")
 
 if __name__ == "__main__":
