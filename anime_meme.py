@@ -17,6 +17,7 @@ PIKABU_SERIES_URLS = [
 ]
 
 POSTED_IDS_FILE = "posted_memes.txt"
+LAST_TYPE_FILE = "last_meme_type.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -29,6 +30,16 @@ def load_posted_ids():
 def save_posted_id(post_id):
     with open(POSTED_IDS_FILE, 'a', encoding='utf-8') as f:
         f.write(post_id + '\n')
+
+def get_last_type():
+    if os.path.exists(LAST_TYPE_FILE):
+        with open(LAST_TYPE_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    return None
+
+def save_last_type(meme_type):
+    with open(LAST_TYPE_FILE, 'w', encoding='utf-8') as f:
+        f.write(meme_type)
 
 def get_posts_from_series(url):
     headers = {
@@ -51,7 +62,6 @@ def get_posts_from_series(url):
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
-        # Видео
         video_tag = article.select_one("video")
         if video_tag:
             video_url = None
@@ -77,7 +87,6 @@ def get_posts_from_series(url):
                 posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
                 continue
 
-        # Картинка
         img_tag = article.select_one("img.story-image__image")
         if img_tag:
             img_url = (
@@ -115,7 +124,15 @@ def main():
         print("Нет новых мемов")
         return
 
-    post = random.choice(all_posts)
+    last_type = get_last_type()
+    desired_type = "video" if last_type == "image" else "image"
+
+    filtered = [p for p in all_posts if p["type"] == desired_type]
+    if not filtered:
+        print(f"Нет мемов типа {desired_type}")
+        return
+
+    post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
 
     media_bytes = download_media(post["media_url"])
@@ -130,6 +147,7 @@ def main():
         bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
 
     save_posted_id(post["id"])
+    save_last_type(post["type"])
     print("Мем опубликован.")
 
 if __name__ == "__main__":
