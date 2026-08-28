@@ -41,7 +41,6 @@ def get_posts_from_series(url):
     for article in soup.select("article.story"):
         post_id = article.get("data-story-id", "")
 
-        # Пропускаем посты с текстом
         content = article.select_one(".story__content")
         if content:
             text_blocks = content.select(".story-block_type_text")
@@ -52,32 +51,31 @@ def get_posts_from_series(url):
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
-        # Видео
-        video_url = None
-
         video_tag = article.select_one("video")
         if video_tag:
-            video_url = video_tag.get("src") or video_tag.get("data-src")
+            video_url = None
 
-        if not video_url:
-            iframe = article.select_one("iframe")
-            if iframe:
-                video_url = iframe.get("src")
+            source_tag = video_tag.select_one("source")
+            if source_tag:
+                video_url = source_tag.get("src")
 
-        if not video_url:
-            for a in article.select("a[href]"):
-                href = a.get("href", "")
-                if any(ext in href for ext in [".mp4", ".webm", ".mov", "video"]):
-                    video_url = href
-                    break
+            if not video_url:
+                data_source = video_tag.get("data-source")
+                if data_source:
+                    if data_source.startswith("//"):
+                        data_source = "https:" + data_source
+                    if not data_source.endswith(".mp4"):
+                        video_url = data_source + ".mp4"
+                    else:
+                        video_url = data_source
 
-        if video_url:
-            if video_url.startswith("//"):
+            if video_url and video_url.startswith("//"):
                 video_url = "https:" + video_url
-            posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
-            continue
 
-        # Картинка
+            if video_url:
+                posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
+                continue
+
         img_tag = article.select_one("img.story-image__image")
         if img_tag:
             img_url = (
@@ -110,20 +108,13 @@ def main():
         posts = get_posts_from_series(url)
         all_posts.extend(posts)
 
-    # Исключаем опубликованные
     all_posts = [p for p in all_posts if p["id"] not in posted_ids]
     if not all_posts:
         print("Нет новых мемов")
         return
 
-    # Выбираем только картинки (или видео, если появятся)
-    images = [p for p in all_posts if p["type"] == "image"]
-    if not images:
-        print("Нет картинок")
-        return
-
-    post = random.choice(images)
-    print(f"Выбран пост: {post['title']}")
+    post = random.choice(all_posts)
+    print(f"Выбран пост: {post['title']} (тип: {post['type']})")
 
     media_bytes = download_media(post["media_url"])
     if not media_bytes:
@@ -132,7 +123,10 @@ def main():
 
     caption = f"{post['title']}\n\n#аниме #мем"
 
-    bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
+    if post["type"] == "video":
+        bot.send_video(CHANNEL_ID, media_bytes, caption=caption)
+    else:
+        bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
 
     save_posted_id(post["id"])
     print("Мем опубликован.")
