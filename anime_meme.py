@@ -122,9 +122,8 @@ def main():
     # Исключаем опубликованные
     available = [p for p in all_posts if p["id"] not in posted_ids]
     if not available:
-        print("Нет новых мемов, начинаем заново")
-        posted_ids.clear()
-        available = all_posts
+        print("Все мемы уже опубликованы")
+        return
 
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
@@ -133,7 +132,7 @@ def main():
     filtered = [p for p in available if p["type"] == desired_type]
     if not filtered:
         print(f"Нет новых мемов типа {desired_type}, берём другой тип")
-        filtered = available  # берём любой тип
+        filtered = available
 
     post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
