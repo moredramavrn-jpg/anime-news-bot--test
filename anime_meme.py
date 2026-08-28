@@ -127,10 +127,12 @@ def main():
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
 
+    print(f"last_type = {last_type}, desired_type = {desired_type}")
+
     filtered = [p for p in all_posts if p["type"] == desired_type]
     if not filtered:
-        print(f"Нет мемов типа {desired_type}")
-        return
+        print(f"Нет мемов типа {desired_type}, берём любой")
+        filtered = all_posts  # если нет нужного типа, берём любой
 
     post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
