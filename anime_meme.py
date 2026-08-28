@@ -1,5 +1,6 @@
 import os
 import random
+import time
 import requests
 import urllib3
 import telebot
@@ -41,13 +42,7 @@ def save_last_type(meme_type):
     with open(LAST_TYPE_FILE, 'w', encoding='utf-8') as f:
         f.write(meme_type)
 
-def get_posts_from_series(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    r = requests.get(url, headers=headers, timeout=20)
-    soup = BeautifulSoup(r.text, "lxml")
-
+def parse_posts(soup):
     posts = []
     for article in soup.select("article.story"):
         post_id = article.get("data-story-id", "")
@@ -101,6 +96,27 @@ def get_posts_from_series(url):
 
     return posts
 
+def get_all_posts_from_series(base_url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    all_posts = []
+    page = 1
+    while True:
+        url = f"{base_url}?page={page}" if page > 1 else base_url
+        r = requests.get(url, headers=headers, timeout=20)
+        soup = BeautifulSoup(r.text, "lxml")
+        posts = parse_posts(soup)
+        if not posts:
+            break
+        all_posts.extend(posts)
+        print(f"Страница {page}: {len(posts)} постов")
+        page += 1
+        if page > 15:
+            break
+        time.sleep(1)
+    return all_posts
+
 def download_media(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -116,10 +132,11 @@ def main():
     all_posts = []
 
     for url in PIKABU_SERIES_URLS:
-        posts = get_posts_from_series(url)
+        posts = get_all_posts_from_series(url)
         all_posts.extend(posts)
 
-    # Исключаем опубликованные
+    print(f"Всего собрано: {len(all_posts)}")
+
     available = [p for p in all_posts if p["id"] not in posted_ids]
     if not available:
         print("Все мемы уже опубликованы")
@@ -128,7 +145,6 @@ def main():
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
 
-    # Ищем неопубликованные нужного типа
     filtered = [p for p in available if p["type"] == desired_type]
     if not filtered:
         print(f"Нет новых мемов типа {desired_type}, берём другой тип")
@@ -150,7 +166,6 @@ def main():
 
     save_posted_id(post["id"])
 
-    # Обновляем тип только если опубликовали то, что хотели
     if post["type"] == desired_type:
         save_last_type(post["type"])
         print(f"Тип обновлён на {post['type']}")
