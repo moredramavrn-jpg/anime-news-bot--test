@@ -19,7 +19,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pyTelegramBotAPI requests beautifulsoup4 lxml
+        run: pip install pyTelegramBotAPI requests beautifulsoup4 lxml Pillow
 
       - name: Run anime_meme.py
         env:
@@ -31,11 +31,11 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add posted_memes.txt
+          git add posted_memes.txt last_meme_type.txt
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Update posted memes"
+            git commit -m "Update meme state"
             git pull --rebase --autostash origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
           fi
