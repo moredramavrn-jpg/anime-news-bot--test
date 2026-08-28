@@ -49,21 +49,18 @@ def get_posts_from_series():
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
-        # Видео: ищем в разных местах
+        # Видео
         video_url = None
 
-        # 1. Тег video
         video_tag = article.select_one("video")
         if video_tag:
             video_url = video_tag.get("src") or video_tag.get("data-src")
 
-        # 2. iframe (YouTube, VK и т.д.)
         if not video_url:
             iframe = article.select_one("iframe")
             if iframe:
                 video_url = iframe.get("src")
 
-        # 3. Ссылки на видеофайлы
         if not video_url:
             for a in article.select("a[href]"):
                 href = a.get("href", "")
@@ -71,7 +68,6 @@ def get_posts_from_series():
                     video_url = href
                     break
 
-        # Если нашли видео
         if video_url:
             if video_url.startswith("//"):
                 video_url = "https:" + video_url
@@ -117,7 +113,7 @@ def main():
     posted_ids = load_posted_ids()
     posts = get_posts_from_series()
 
-    # Исключаем уже опубликованные
+    # Исключаем опубликованные
     posts = [p for p in posts if p["id"] not in posted_ids]
     if not posts:
         print("Нет новых мемов")
@@ -126,9 +122,11 @@ def main():
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
 
+    # Строго чередуем
     filtered = [p for p in posts if p["type"] == desired_type]
     if not filtered:
-        filtered = posts
+        print(f"Нет мемов типа {desired_type}")
+        return
 
     post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
@@ -138,7 +136,7 @@ def main():
         print("Не удалось скачать медиа")
         return
 
-    caption = f"{post['title']}\n\n#аниме #мем #пикабу"
+    caption = f"{post['title']}\n\n#аниме #мем"
 
     if post["type"] == "video":
         bot.send_video(CHANNEL_ID, media_bytes, caption=caption)
