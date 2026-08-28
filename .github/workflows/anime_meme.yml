@@ -2,7 +2,7 @@ name: Anime Meme
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # каждый день в 12:00 UTC
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:
@@ -26,3 +26,16 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
         run: python anime_meme.py
+
+      - name: Commit changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add last_meme_type.txt posted_memes.txt
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update meme state"
+            git pull --rebase --autostash origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          fi
