@@ -13,8 +13,19 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 PIKABU_SERIES_URL = "https://pikabu.ru/series/anime_memyi_59562"
 LAST_TYPE_FILE = "last_meme_type.txt"
+POSTED_IDS_FILE = "posted_memes.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+def load_posted_ids():
+    if not os.path.exists(POSTED_IDS_FILE):
+        return set()
+    with open(POSTED_IDS_FILE, 'r', encoding='utf-8') as f:
+        return {line.strip() for line in f if line.strip()}
+
+def save_posted_id(post_id):
+    with open(POSTED_IDS_FILE, 'a', encoding='utf-8') as f:
+        f.write(post_id + '\n')
 
 def get_posts_from_series():
     headers = {
@@ -25,6 +36,8 @@ def get_posts_from_series():
 
     posts = []
     for article in soup.select("article.story"):
+        post_id = article.get("data-story-id", "")
+
         # Пропускаем посты с текстом
         content = article.select_one(".story__content")
         if content:
@@ -36,13 +49,33 @@ def get_posts_from_series():
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
-        # Видео
+        # Видео: ищем в разных местах
+        video_url = None
+
+        # 1. Тег video
         video_tag = article.select_one("video")
         if video_tag:
             video_url = video_tag.get("src") or video_tag.get("data-src")
-            if video_url and video_url.startswith("//"):
+
+        # 2. iframe (YouTube, VK и т.д.)
+        if not video_url:
+            iframe = article.select_one("iframe")
+            if iframe:
+                video_url = iframe.get("src")
+
+        # 3. Ссылки на видеофайлы
+        if not video_url:
+            for a in article.select("a[href]"):
+                href = a.get("href", "")
+                if any(ext in href for ext in [".mp4", ".webm", ".mov", "video"]):
+                    video_url = href
+                    break
+
+        # Если нашли видео
+        if video_url:
+            if video_url.startswith("//"):
                 video_url = "https:" + video_url
-            posts.append({"title": title, "link": link, "type": "video", "media_url": video_url})
+            posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
             continue
 
         # Картинка
@@ -56,7 +89,7 @@ def get_posts_from_series():
             if img_url and img_url.startswith("//"):
                 img_url = "https:" + img_url
             if img_url:
-                posts.append({"title": title, "link": link, "type": "image", "media_url": img_url})
+                posts.append({"id": post_id, "title": title, "link": link, "type": "image", "media_url": img_url})
 
     return posts
 
@@ -81,20 +114,20 @@ def save_last_type(meme_type):
         f.write(meme_type)
 
 def main():
+    posted_ids = load_posted_ids()
     posts = get_posts_from_series()
+
+    # Исключаем уже опубликованные
+    posts = [p for p in posts if p["id"] not in posted_ids]
     if not posts:
-        print("Не удалось найти мемы")
+        print("Нет новых мемов")
         return
 
     last_type = get_last_type()
-
-    # Определяем, какой тип нам нужен в этот раз (чередуем)
     desired_type = "video" if last_type == "image" else "image"
 
-    # Отбираем посты нужного типа
     filtered = [p for p in posts if p["type"] == desired_type]
     if not filtered:
-        # Если нужного типа нет, берём любой
         filtered = posts
 
     post = random.choice(filtered)
@@ -112,7 +145,8 @@ def main():
     else:
         bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
 
-    # Сохраняем тип опубликованного мема
+    # Сохраняем ID и тип
+    save_posted_id(post["id"])
     save_last_type(post["type"])
 
     print("Мем опубликован.")
