@@ -19,11 +19,10 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pyTelegramBotAPI requests Pillow
+        run: pip install pyTelegramBotAPI requests beautifulsoup4 lxml
 
       - name: Run anime_meme.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          GIGACHAT_AUTHORIZATION_KEY: ${{ secrets.GIGACHAT_AUTHORIZATION_KEY }}
         run: python anime_meme.py
