@@ -51,6 +51,7 @@ def get_posts_from_series(url):
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
+        # Видео
         video_tag = article.select_one("video")
         if video_tag:
             video_url = None
@@ -76,6 +77,7 @@ def get_posts_from_series(url):
                 posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
                 continue
 
+        # Картинка
         img_tag = article.select_one("img.story-image__image")
         if img_tag:
             img_url = (
@@ -121,11 +123,10 @@ def main():
         print("Не удалось скачать медиа")
         return
 
-    caption = f"{post['title']}\n\n#аниме #мем"
-
     if post["type"] == "video":
-        bot.send_video(CHANNEL_ID, media_bytes, caption=caption)
+        bot.send_video(CHANNEL_ID, media_bytes, caption="#аниме #мем")
     else:
+        caption = f"{post['title']}\n\n#аниме #мем"
         bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
 
     save_posted_id(post["id"])
