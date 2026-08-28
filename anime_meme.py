@@ -153,30 +153,52 @@ def wrap_text(draw, text, font, max_width):
     return "\n".join(lines)
 
 def add_text_to_image(image_bytes, text):
-    """Добавляет текст на картинку снизу с переносом по ширине."""
+    """Добавляет текст на картинку снизу, подбирая размер шрифта под ширину."""
     try:
         img = Image.open(image_bytes).convert("RGB")
         width, height = img.size
 
-        # Резервируем место под текст
-        text_space = 160
+        # Пространство под текст = 18% от высоты картинки
+        text_space = max(100, int(height * 0.18))
         new_img = Image.new("RGB", (width, height + text_space), "black")
         new_img.paste(img, (0, 0))
 
         draw = ImageDraw.Draw(new_img)
+
+        # Начальный размер шрифта — 6% от ширины, но не больше 80px
+        font_size = max(20, int(width * 0.06))
+        font_size = min(font_size, 80)
+
         try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
         except:
             font = ImageFont.load_default()
 
-        # Максимальная ширина текста = ширина картинки минус отступы
-        max_text_width = width - 40
-        wrapped = wrap_text(draw, text, font, max_text_width)
+        # Максимальная ширина текста: ширина фото минус 5% от ширины с каждой стороны
+        max_text_width = int(width * 0.9)
 
-        # Вычисляем высоту текста
-        text_bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, align="center")
-        text_width = text_bbox[2] - text_bbox[0]
-        text_height = text_bbox[3] - text_bbox[1]
+        # Подбираем шрифт, пока текст не влезет по ширине
+        while font_size > 16:
+            wrapped = wrap_text(draw, text, font, max_text_width)
+            bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, align="center")
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+
+            if text_width <= max_text_width and text_height <= text_space - 20:
+                break
+
+            # Уменьшаем шрифт
+            font_size -= 2
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+            except:
+                font = ImageFont.load_default()
+
+        # Финальные отступы
+        wrapped = wrap_text(draw, text, font, max_text_width)
+        bbox = draw.multiline_textbbox((0, 0), wrapped, font=font, align="center")
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
 
         x = (width - text_width) // 2
         y = height + (text_space - text_height) // 2
