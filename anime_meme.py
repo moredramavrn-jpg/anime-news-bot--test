@@ -12,6 +12,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 PIKABU_SERIES_URL = "https://pikabu.ru/series/anime_memyi_59562"
+LAST_TYPE_FILE = "last_meme_type.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -24,10 +25,9 @@ def get_posts_from_series():
 
     posts = []
     for article in soup.select("article.story"):
-        # Проверяем, нет ли текста в посте (только картинка/видео)
+        # Пропускаем посты с текстом
         content = article.select_one(".story__content")
         if content:
-            # Если есть текст, пропускаем
             text_blocks = content.select(".story-block_type_text")
             if text_blocks:
                 continue
@@ -36,7 +36,7 @@ def get_posts_from_series():
         title = title_tag.get_text(strip=True) if title_tag else "Без названия"
         link = title_tag.get("href") if title_tag else ""
 
-        # Проверяем видео
+        # Видео
         video_tag = article.select_one("video")
         if video_tag:
             video_url = video_tag.get("src") or video_tag.get("data-src")
@@ -45,7 +45,7 @@ def get_posts_from_series():
             posts.append({"title": title, "link": link, "type": "video", "media_url": video_url})
             continue
 
-        # Ищем картинку
+        # Картинка
         img_tag = article.select_one("img.story-image__image")
         if img_tag:
             img_url = (
@@ -70,13 +70,34 @@ def download_media(url):
         print(f"Ошибка скачивания: {e}")
         return None
 
+def get_last_type():
+    if os.path.exists(LAST_TYPE_FILE):
+        with open(LAST_TYPE_FILE, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    return None
+
+def save_last_type(meme_type):
+    with open(LAST_TYPE_FILE, 'w', encoding='utf-8') as f:
+        f.write(meme_type)
+
 def main():
     posts = get_posts_from_series()
     if not posts:
         print("Не удалось найти мемы")
         return
 
-    post = random.choice(posts)
+    last_type = get_last_type()
+
+    # Определяем, какой тип нам нужен в этот раз (чередуем)
+    desired_type = "video" if last_type == "image" else "image"
+
+    # Отбираем посты нужного типа
+    filtered = [p for p in posts if p["type"] == desired_type]
+    if not filtered:
+        # Если нужного типа нет, берём любой
+        filtered = posts
+
+    post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
 
     media_bytes = download_media(post["media_url"])
@@ -90,6 +111,9 @@ def main():
         bot.send_video(CHANNEL_ID, media_bytes, caption=caption)
     else:
         bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
+
+    # Сохраняем тип опубликованного мема
+    save_last_type(post["type"])
 
     print("Мем опубликован.")
 
