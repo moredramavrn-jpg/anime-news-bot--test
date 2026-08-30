@@ -1,0 +1,40 @@
+name: Anime Director
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  director:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyTelegramBotAPI requests
+
+      - name: Run anime_director.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          GIGACHAT_AUTHORIZATION_KEY: ${{ secrets.GIGACHAT_AUTHORIZATION_KEY }}
+        run: python anime_director.py
+
+      - name: Commit used files
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add used_persons.json
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Update used persons"
+            git pull --rebase --autostash origin ${{ github.ref_name }}
+            git push origin HEAD:${{ github.ref_name }}
+          fi
