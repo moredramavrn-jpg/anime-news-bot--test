@@ -1,0 +1,124 @@
+import os
+import json
+import uuid
+import time
+import urllib3
+import telebot
+import requests
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
+
+USED_STUDIOS_FILE = "used_studios.json"
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+gigachat_access_token = None
+gigachat_token_expires_at = 0
+
+def get_gigachat_token():
+    global gigachat_access_token, gigachat_token_expires_at
+
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
+    try:
+        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
+        r.raise_for_status()
+        token_data = r.json()
+        gigachat_access_token = token_data.get("access_token")
+        expires_at = token_data.get("expires_at")
+        if expires_at:
+            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+        else:
+            gigachat_token_expires_at = time.time() + 1800
+        return gigachat_access_token
+    except Exception as e:
+        print(f"Ошибка получения токена GigaChat: {e}")
+        return None
+
+def giga_request(prompt, max_tokens=500):
+    token = get_gigachat_token()
+    if not token:
+        return ""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeStudioBot/1.0"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {"role": "system", "content": "Ты — эксперт по аниме."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": max_tokens
+    }
+    try:
+        r = requests.post("https://api.giga.chat/v1/chat/completions",
+                          headers=headers, json=payload, timeout=30, verify=False)
+        r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Ошибка GigaChat: {e}")
+        return ""
+
+def load_used_studios():
+    if os.path.exists(USED_STUDIOS_FILE):
+        with open(USED_STUDIOS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+def save_used_studios(studios):
+    with open(USED_STUDIOS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(studios, f, ensure_ascii=False)
+
+def get_studio():
+    used = load_used_studios()
+    if used:
+        prompt = "Назови случайную известную аниме-студию, которой нет в списке: " + ", ".join(used) + ".\nВыведи только название студии."
+    else:
+        prompt = "Назови случайную известную аниме-студию.\nВыведи только название студии."
+    return giga_request(prompt, max_tokens=50).strip()
+
+def get_studio_info(studio):
+    prompt = f"Расскажи об аниме-студии «{studio}» кратко: история, особенности, лучшие работы. Выведи не более 5 предложений."
+    return giga_request(prompt, max_tokens=500).strip()
+
+def main():
+    studio = get_studio()
+    if not studio:
+        print("Не удалось получить студию")
+        return
+
+    info = get_studio_info(studio)
+    if not info:
+        print("Не удалось получить информацию")
+        return
+
+    post = f"🏢 <b>Студия: {studio}</b>\n\n{info}\n\n#аниме #студия"
+    bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+
+    studios = load_used_studios()
+    studios.append(studio)
+    save_used_studios(studios)
+
+    print("Пост опубликован.")
+
+if __name__ == "__main__":
+    main()
