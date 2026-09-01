@@ -134,7 +134,6 @@ def parse_person_info(content):
     return bio, works
 
 def truncate_post(text, max_len=900):
-    """Обрезает текст по предложениям, чтобы он влезал в max_len."""
     if len(text) <= max_len:
         return text
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -184,38 +183,11 @@ def get_wiki_image(person, lang):
         print(f"Ошибка {lang} Википедии: {e}")
         return ""
 
-def get_anilist_image(person):
-    query = """
-    query ($search: String) {
-      Staff(search: $search) {
-        image {
-          large
-        }
-      }
-    }
-    """
-    variables = {"search": person}
-    headers = {"Content-Type": "application/json", "User-Agent": "AnimeDirectorBot/1.0"}
-    try:
-        r = requests.post("https://graphql.anilist.co",
-                          json={"query": query, "variables": variables},
-                          headers=headers,
-                          timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        return data.get("data", {}).get("Staff", {}).get("image", {}).get("large", "")
-    except Exception as e:
-        print(f"Ошибка AniList: {e}")
-        return ""
-
 def get_person_image(person):
     photo = get_wiki_image(person, "en")
     if photo:
         return photo
     photo = get_wiki_image(person, "ru")
-    if photo:
-        return photo
-    photo = get_anilist_image(person)
     if photo:
         return photo
     return ""
@@ -255,7 +227,6 @@ def main():
             post += f"\n— {work}\n"
     post += "\n#аниме #режиссёр #мангака"
 
-    # Сокращаем текст для подписи к фото
     caption = truncate_post(post, 900)
 
     photo_url = get_person_image(person)
