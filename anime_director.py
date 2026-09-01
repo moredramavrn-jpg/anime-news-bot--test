@@ -128,43 +128,78 @@ def parse_person_info(content):
                 works.append(work)
     return bio, works
 
-def get_person_image_wikipedia(person):
+def get_wiki_image(person, lang):
     try:
-        search_url = "https://ru.wikipedia.org/w/api.php"
+        url = f"https://{lang}.wikipedia.org/w/api.php"
         params = {
             "action": "query",
             "format": "json",
             "list": "search",
             "srsearch": person,
-            "srlimit": 1
+            "srlimit": 5
         }
-        r = requests.get(search_url, params=params, timeout=15)
+        r = requests.get(url, params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
-        search_results = data.get("query", {}).get("search", [])
-        if not search_results:
-            return ""
-        page_title = search_results[0]["title"]
-
-        image_params = {
-            "action": "query",
-            "format": "json",
-            "titles": page_title,
-            "prop": "pageimages",
-            "piprop": "original"
-        }
-        r2 = requests.get(search_url, params=image_params, timeout=15)
-        r2.raise_for_status()
-        data2 = r2.json()
-        pages = data2.get("query", {}).get("pages", {})
-        for page_id, page in pages.items():
-            original = page.get("original", {})
-            if original:
-                return original.get("source", "")
+        results = data.get("query", {}).get("search", [])
+        for res in results:
+            page_title = res.get("title", "")
+            image_params = {
+                "action": "query",
+                "format": "json",
+                "titles": page_title,
+                "prop": "pageimages",
+                "piprop": "original"
+            }
+            r2 = requests.get(url, params=image_params, timeout=15)
+            r2.raise_for_status()
+            data2 = r2.json()
+            pages = data2.get("query", {}).get("pages", {})
+            for page_id, page in pages.items():
+                original = page.get("original", {})
+                if original:
+                    return original.get("source", "")
         return ""
     except Exception as e:
-        print(f"Ошибка Википедии: {e}")
+        print(f"Ошибка {lang} Википедии: {e}")
         return ""
+
+def get_anilist_image(person):
+    query = """
+    query ($search: String) {
+      Staff(search: $search) {
+        image {
+          large
+        }
+      }
+    }
+    """
+    variables = {"search": person}
+    try:
+        r = requests.post("https://graphql.anilist.co",
+                          json={"query": query, "variables": variables},
+                          timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("data", {}).get("Staff", {}).get("image", {}).get("large", "")
+    except Exception as e:
+        print(f"Ошибка AniList: {e}")
+        return ""
+
+def get_person_image(person):
+    # Пробуем английскую Википедию
+    photo = get_wiki_image(person, "en")
+    if photo:
+        return photo
+    # Пробуем русскую Википедию
+    photo = get_wiki_image(person, "ru")
+    if photo:
+        return photo
+    # Пробуем AniList
+    photo = get_anilist_image(person)
+    if photo:
+        return photo
+    return ""
 
 def download_image(url):
     try:
@@ -197,7 +232,7 @@ def main():
             post += f"\n— {work}\n"
     post += "\n#аниме #режиссёр #мангака"
 
-    photo_url = get_person_image_wikipedia(person)
+    photo_url = get_person_image(person)
     if photo_url:
         photo_bytes = download_image(photo_url)
         if photo_bytes:
