@@ -131,8 +131,7 @@ def parse_person_info(content):
 
     return bio, works
 
-def get_person_image(person):
-    """Ищет фото режиссёра через AniList API."""
+def get_person_image_anilist(person):
     query = """
     query ($search: String) {
       Staff(search: $search) {
@@ -149,11 +148,35 @@ def get_person_image(person):
                           timeout=15)
         r.raise_for_status()
         data = r.json()
-        image_url = data.get("data", {}).get("Staff", {}).get("image", {}).get("large", "")
-        return image_url
+        return data.get("data", {}).get("Staff", {}).get("image", {}).get("large", "")
     except Exception as e:
-        print(f"Ошибка получения фото: {e}")
+        print(f"Ошибка AniList: {e}")
         return ""
+
+def get_person_image_wikimedia(person):
+    try:
+        search_url = "https://commons.wikimedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": person,
+            "gsrlimit": 1,
+            "prop": "imageinfo",
+            "iiprop": "url",
+            "iiurlwidth": 500
+        }
+        r = requests.get(search_url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        pages = data.get("query", {}).get("pages", {})
+        for page_id, page in pages.items():
+            imageinfo = page.get("imageinfo", [])
+            if imageinfo:
+                return imageinfo[0].get("thumburl") or imageinfo[0].get("url")
+    except Exception as e:
+        print(f"Ошибка Wikimedia: {e}")
+    return ""
 
 def download_image(url):
     try:
@@ -161,7 +184,7 @@ def download_image(url):
         r.raise_for_status()
         return r.content
     except Exception as e:
-        print(f"Ошибка скачивания фото: {e}")
+        print(f"Ошибка скачивания: {e}")
         return None
 
 def main():
@@ -171,10 +194,6 @@ def main():
         return
 
     info = get_person_info(person)
-    if not info:
-        print("Не удалось получить информацию")
-        return
-
     bio, works = parse_person_info(info)
 
     header = "🎬 <b>Рубрика: о режиссёрах аниме</b>\n\n"
@@ -182,19 +201,15 @@ def main():
     separator = "┄┄┄ ✦ ┄┄┄\n"
 
     post = header + name_line + separator
-
     if bio:
         post += f"{bio}\n\n"
-
     if works:
         post += "<b>Среди лучших работ:</b>\n"
         for work in works[:3]:
             post += f"\n— {work}\n"
-
     post += "\n#аниме #режиссёр #мангака"
 
-    # Получаем фото режиссёра
-    photo_url = get_person_image(person)
+    photo_url = get_person_image_anilist(person) or get_person_image_wikimedia(person)
     if photo_url:
         photo_bytes = download_image(photo_url)
         if photo_bytes:
