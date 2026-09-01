@@ -105,7 +105,7 @@ def get_person_info(person):
     prompt = (
         f"Расскажи о {person}:\n"
         "1. Краткая биография (2-3 предложения).\n"
-        "2. Ровно 3 лучшие работы с кратким описанием (по одному предложению).\n"
+        "2. Ровно 3 лучшие работы с кратким описанием.\n"
         "Формат:\n"
         "Биография: <текст>\n"
         "Работы:\n"
@@ -168,16 +168,17 @@ def get_wiki_image(person, lang):
                 "format": "json",
                 "titles": page_title,
                 "prop": "pageimages",
-                "piprop": "original"
+                "piprop": "thumbnail",
+                "pithumbsize": 500
             }
             r2 = requests.get(url, params=image_params, headers=headers, timeout=15)
             r2.raise_for_status()
             data2 = r2.json()
             pages = data2.get("query", {}).get("pages", {})
             for page_id, page in pages.items():
-                original = page.get("original", {})
-                if original:
-                    return original.get("source", "")
+                thumbnail = page.get("thumbnail", {})
+                if thumbnail:
+                    return thumbnail.get("source", "")
         return ""
     except Exception as e:
         print(f"Ошибка {lang} Википедии: {e}")
@@ -192,18 +193,23 @@ def get_person_image(person):
         return photo
     return ""
 
-def download_image(url):
-    try:
-        time.sleep(2)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        r = requests.get(url, headers=headers, timeout=20)
-        r.raise_for_status()
-        return r.content
-    except Exception as e:
-        print(f"Ошибка скачивания: {e}")
-        return None
+def download_image(url, retries=3):
+    for attempt in range(retries):
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code == 429:
+                print(f"429, попытка {attempt+1}, ждём 5 сек...")
+                time.sleep(5)
+                continue
+            r.raise_for_status()
+            return r.content
+        except Exception as e:
+            print(f"Ошибка скачивания: {e}")
+            time.sleep(3)
+    return None
 
 def main():
     person = get_person()
