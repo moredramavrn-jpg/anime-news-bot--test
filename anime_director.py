@@ -134,6 +134,7 @@ def parse_person_info(content):
 
 def get_wiki_image(person, lang):
     try:
+        time.sleep(1)
         url = f"https://{lang}.wikipedia.org/w/api.php"
         headers = {"User-Agent": "AnimeDirectorBot/1.0"}
         params = {
@@ -149,6 +150,7 @@ def get_wiki_image(person, lang):
         results = data.get("query", {}).get("search", [])
         for res in results:
             page_title = res.get("title", "")
+            time.sleep(1)
             image_params = {
                 "action": "query",
                 "format": "json",
