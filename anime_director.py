@@ -105,32 +105,37 @@ def get_person_info(person):
     prompt = (
         f"Расскажи о {person}:\n"
         "1. Краткая биография (2-3 предложения).\n"
-        "2. Ровно 3 лучшие работы с кратким описанием.\n"
-        "Формат:\n"
+        "2. Ровно 3 лучшие работы, КАЖДАЯ С НОВОЙ СТРОКИ и с тире в начале.\n"
+        "Формат строго:\n"
         "Биография: <текст>\n"
         "Работы:\n"
         "- Название — описание\n"
         "- Название — описание\n"
-        "- Название — описание"
+        "- Название — описание\n"
+        "Не пиши работы в одну строку."
     )
-    result = giga_request(prompt, max_tokens=600)
+    result = giga_request(prompt, max_tokens=700)
     return result if result else ""
 
 def parse_person_info(content):
     bio = ""
     works = []
+    lines = content.split('\n')
     mode = None
-    for line in content.split('\n'):
+    for line in lines:
         line = line.strip()
         if line.startswith("Биография:"):
             bio = line.replace("Биография:", "").strip()
             mode = "bio"
         elif line.startswith("Работы:"):
             mode = "works"
-        elif mode == "works" and line.startswith("- "):
-            work = line[2:].strip()
-            if work:
-                works.append(work)
+        elif mode == "works":
+            if re.match(r'^[-–—•]', line):
+                work = re.sub(r'^[-–—•]\s*', '', line)
+                if work:
+                    works.append(work)
+            elif line and (' — ' in line or ' – ' in line):
+                works.append(line)
     return bio, works
 
 def truncate_post(text, max_len=900):
