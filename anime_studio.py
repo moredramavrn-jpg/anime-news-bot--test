@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import uuid
 import time
 import urllib3
@@ -13,6 +14,34 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 USED_STUDIOS_FILE = "used_studios.json"
+
+FAMOUS_STUDIOS = [
+    "Madhouse",
+    "Ufotable",
+    "Kyoto Animation",
+    "Bones",
+    "MAPPA",
+    "Wit Studio",
+    "A-1 Pictures",
+    "Trigger",
+    "Production I.G",
+    "Sunrise",
+    "Studio Ghibli",
+    "Toei Animation",
+    "Shaft",
+    "J.C.Staff",
+    "David Production",
+    "P.A. Works",
+    "CloverWorks",
+    "Science SARU",
+    "LIDENFILMS",
+    "Studio Pierrot",
+    "OLM",
+    "Gainax",
+    "Studio Deen",
+    "Doga Kobo",
+    "Kinema Citrus"
+]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -45,7 +74,7 @@ def get_gigachat_token():
             gigachat_token_expires_at = time.time() + 1800
         return gigachat_access_token
     except Exception as e:
-        print(f"Ошибка получения токена GigaChat: {e}")
+        print(f"Ошибка токена: {e}")
         return None
 
 def giga_request(prompt, max_tokens=500):
@@ -70,7 +99,10 @@ def giga_request(prompt, max_tokens=500):
     }
     try:
         r = requests.post("https://api.giga.chat/v1/chat/completions",
-                          headers=headers, json=payload, timeout=30, verify=False)
+                          headers=headers,
+                          json=payload,
+                          timeout=30,
+                          verify=False)
         r.raise_for_status()
         data = r.json()
         return data["choices"][0]["message"]["content"].strip()
@@ -90,15 +122,117 @@ def save_used_studios(studios):
 
 def get_studio():
     used = load_used_studios()
-    if used:
-        prompt = "Назови случайную известную аниме-студию, которой нет в списке: " + ", ".join(used) + ".\nВыведи только название студии."
-    else:
-        prompt = "Назови случайную известную аниме-студию.\nВыведи только название студии."
-    return giga_request(prompt, max_tokens=50).strip()
+    available = [s for s in FAMOUS_STUDIOS if s not in used]
+    if not available:
+        used.clear()
+        available = FAMOUS_STUDIOS[:]
+    return random.choice(available)
 
 def get_studio_info(studio):
-    prompt = f"Расскажи об аниме-студии «{studio}» кратко: история, особенности, лучшие работы. Выведи не более 5 предложений."
-    return giga_request(prompt, max_tokens=500).strip()
+    prompt = (
+        f"Расскажи о студии {studio}:\n"
+        "1. Краткая история и особенности (2-3 предложения).\n"
+        "2. Ровно 3 лучшие работы, КАЖДАЯ С НОВОЙ СТРОКИ и с тире в начале.\n"
+        "Формат строго:\n"
+        "Биография: <текст>\n"
+        "Работы:\n"
+        "- Название — описание\n"
+        "- Название — описание\n"
+        "- Название — описание\n"
+        "Не пиши работы в одну строку."
+    )
+    result = giga_request(prompt, max_tokens=700)
+    return result if result else ""
+
+def parse_studio_info(content):
+    bio = ""
+    works = []
+    lines = content.split('\n')
+    mode = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Биография:"):
+            bio = line.replace("Биография:", "").strip()
+            mode = "bio"
+        elif line.startswith("Работы:"):
+            mode = "works"
+        elif mode == "works":
+            if re.match(r'^[-–—•]', line):
+                work = re.sub(r'^[-–—•]\s*', '', line)
+                if work:
+                    works.append(work)
+            elif line and (' — ' in line or ' – ' in line):
+                works.append(line)
+    return bio, works
+
+def truncate_post(text, max_len=900):
+    if len(text) <= max_len:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    result = ""
+    for s in sentences:
+        if len(result) + len(s) + 1 > max_len:
+            break
+        result = (result + " " + s).strip()
+    return result
+
+def get_studio_image(studio):
+    # Попробуем Википедию
+    try:
+        url = "https://ru.wikipedia.org/w/api.php"
+        headers = {"User-Agent": "AnimeStudioBot/1.0"}
+        params = {
+            "action": "query",
+            "format": "json",
+            "list": "search",
+            "srsearch": studio,
+            "srlimit": 3
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("query", {}).get("search", [])
+        for res in results:
+            page_title = res.get("title", "")
+            time.sleep(1)
+            image_params = {
+                "action": "query",
+                "format": "json",
+                "titles": page_title,
+                "prop": "pageimages",
+                "piprop": "thumbnail",
+                "pithumbsize": 500
+            }
+            r2 = requests.get(url, params=image_params, headers=headers, timeout=15)
+            r2.raise_for_status()
+            data2 = r2.json()
+            pages = data2.get("query", {}).get("pages", {})
+            for page_id, page in pages.items():
+                thumbnail = page.get("thumbnail", {})
+                if thumbnail:
+                    return thumbnail.get("source", "")
+        return ""
+    except Exception as e:
+        print(f"Ошибка Википедии: {e}")
+        return ""
+
+def download_image(url, retries=3):
+    for attempt in range(retries):
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code == 429:
+                print(f"429, попытка {attempt+1}, ждём 5 сек...")
+                time.sleep(5)
+                continue
+            r.raise_for_status()
+            return r.content
+        except Exception as e:
+            print(f"Ошибка скачивания: {e}")
+            time.sleep(3)
+    return None
 
 def main():
     studio = get_studio()
@@ -107,18 +241,39 @@ def main():
         return
 
     info = get_studio_info(studio)
-    if not info:
-        print("Не удалось получить информацию")
-        return
+    bio, works = parse_studio_info(info)
 
-    post = f"🏢 <b>Студия: {studio}</b>\n\n{info}\n\n#аниме #студия"
-    bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+    header = "🏢 <b>Рубрика: о студиях аниме</b>\n\n"
+    name_line = f"<b>{studio}</b>\n"
+    separator = "┄┄┄ ✦ ┄┄┄\n"
+
+    post = header + name_line + separator
+    if bio:
+        post += f"{bio}\n\n"
+    if works:
+        post += "<b>Лучшие работы:</b>\n"
+        for work in works[:3]:
+            post += f"\n— {work}\n"
+    post += "\n#аниме #студия"
+
+    caption = truncate_post(post, 900)
+
+    photo_url = get_studio_image(studio)
+    if photo_url:
+        photo_bytes = download_image(photo_url)
+        if photo_bytes:
+            bot.send_photo(CHANNEL_ID, photo_bytes, caption=caption, parse_mode='HTML')
+            print("Пост с фото опубликован.")
+        else:
+            bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+            print("Пост без фото опубликован.")
+    else:
+        bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+        print("Пост без фото опубликован.")
 
     studios = load_used_studios()
     studios.append(studio)
     save_used_studios(studios)
-
-    print("Пост опубликован.")
 
 if __name__ == "__main__":
     main()
