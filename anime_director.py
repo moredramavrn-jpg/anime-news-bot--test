@@ -144,6 +144,35 @@ def truncate_post(text, max_len=900):
         result = (result + " " + s).strip()
     return result
 
+def get_commons_image(person):
+    try:
+        url = "https://commons.wikimedia.org/w/api.php"
+        headers = {"User-Agent": "AnimeDirectorBot/1.0"}
+        params = {
+            "action": "query",
+            "format": "json",
+            "generator": "search",
+            "gsrsearch": f"{person} portrait",
+            "gsrlimit": 5,
+            "prop": "imageinfo",
+            "iiprop": "url",
+            "iiurlwidth": 500
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        pages = data.get("query", {}).get("pages", {})
+        for page_id, page in pages.items():
+            imageinfo = page.get("imageinfo", [])
+            if imageinfo:
+                img_url = imageinfo[0].get("thumburl") or imageinfo[0].get("url")
+                if img_url and re.search(r'\.(jpg|jpeg|png)', img_url, re.IGNORECASE):
+                    return img_url
+        return ""
+    except Exception as e:
+        print(f"Ошибка Commons: {e}")
+        return ""
+
 def get_wiki_image(person, lang):
     try:
         time.sleep(1)
@@ -185,6 +214,9 @@ def get_wiki_image(person, lang):
         return ""
 
 def get_person_image(person):
+    photo = get_commons_image(person)
+    if photo:
+        return photo
     photo = get_wiki_image(person, "en")
     if photo:
         return photo
