@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import uuid
 import time
 import urllib3
@@ -104,7 +105,7 @@ def get_person_info(person):
     prompt = (
         f"Расскажи о {person}:\n"
         "1. Краткая биография (2-3 предложения).\n"
-        "2. Ровно 3 лучшие работы с кратким описанием.\n"
+        "2. Ровно 3 лучшие работы с кратким описанием (по одному предложению).\n"
         "Формат:\n"
         "Биография: <текст>\n"
         "Работы:\n"
@@ -112,7 +113,7 @@ def get_person_info(person):
         "- Название — описание\n"
         "- Название — описание"
     )
-    result = giga_request(prompt, max_tokens=700)
+    result = giga_request(prompt, max_tokens=600)
     return result if result else ""
 
 def parse_person_info(content):
@@ -131,6 +132,18 @@ def parse_person_info(content):
             if work:
                 works.append(work)
     return bio, works
+
+def truncate_post(text, max_len=900):
+    """Обрезает текст по предложениям, чтобы он влезал в max_len."""
+    if len(text) <= max_len:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    result = ""
+    for s in sentences:
+        if len(result) + len(s) + 1 > max_len:
+            break
+        result = (result + " " + s).strip()
+    return result
 
 def get_wiki_image(person, lang):
     try:
@@ -242,11 +255,14 @@ def main():
             post += f"\n— {work}\n"
     post += "\n#аниме #режиссёр #мангака"
 
+    # Сокращаем текст для подписи к фото
+    caption = truncate_post(post, 900)
+
     photo_url = get_person_image(person)
     if photo_url:
         photo_bytes = download_image(photo_url)
         if photo_bytes:
-            bot.send_photo(CHANNEL_ID, photo_bytes, caption=post[:1024], parse_mode='HTML')
+            bot.send_photo(CHANNEL_ID, photo_bytes, caption=caption, parse_mode='HTML')
             print("Пост с фото опубликован.")
         else:
             bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
