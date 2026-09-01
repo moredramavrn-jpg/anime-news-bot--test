@@ -20,12 +20,62 @@ gigachat_access_token = None
 gigachat_token_expires_at = 0
 
 def get_gigachat_token():
-    # ... (как раньше) ...
-    pass
+    global gigachat_access_token, gigachat_token_expires_at
+
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
+    try:
+        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
+        r.raise_for_status()
+        token_data = r.json()
+        gigachat_access_token = token_data.get("access_token")
+        expires_at = token_data.get("expires_at")
+        if expires_at:
+            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+        else:
+            gigachat_token_expires_at = time.time() + 1800
+        return gigachat_access_token
+    except Exception as e:
+        print(f"Ошибка токена: {e}")
+        return None
 
 def giga_request(prompt, max_tokens=500):
-    # ... (как раньше) ...
-    pass
+    token = get_gigachat_token()
+    if not token:
+        return ""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeDirectorBot/1.0"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {"role": "system", "content": "Ты — эксперт по аниме."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": max_tokens
+    }
+    try:
+        r = requests.post("https://api.giga.chat/v1/chat/completions", headers=headers, json=payload, timeout=30, verify=False)
+        r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Ошибка GigaChat: {e}")
+        return ""
 
 def load_used_persons():
     if os.path.exists(USED_PERSONS_FILE):
@@ -43,7 +93,8 @@ def get_person():
         prompt = "Назови случайного известного режиссёра или мангаку аниме, которого нет в списке: " + ", ".join(used) + ".\nВыведи только имя."
     else:
         prompt = "Назови случайного известного режиссёра или мангаку аниме.\nВыведи только имя."
-    return giga_request(prompt, max_tokens=50).strip()
+    result = giga_request(prompt, max_tokens=50)
+    return result.strip() if result else ""
 
 def get_person_info(person):
     prompt = (
@@ -57,7 +108,8 @@ def get_person_info(person):
         "- Название — описание\n"
         "- Название — описание"
     )
-    return giga_request(prompt, max_tokens=700)
+    result = giga_request(prompt, max_tokens=700)
+    return result if result else ""
 
 def parse_person_info(content):
     bio = ""
