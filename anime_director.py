@@ -203,7 +203,10 @@ def get_person_image(person):
 
 def download_image(url):
     try:
-        r = requests.get(url, timeout=15)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
         return r.content
     except Exception as e:
