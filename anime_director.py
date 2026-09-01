@@ -149,6 +149,27 @@ def truncate_post(text, max_len=900):
         result = (result + " " + s).strip()
     return result
 
+def get_duckduckgo_image(person):
+    try:
+        url = "https://api.duckduckgo.com/"
+        params = {
+            "q": person,
+            "format": "json",
+            "no_html": 1,
+            "skip_disambig": 1
+        }
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        for topic in data.get("RelatedTopics", []):
+            icon = topic.get("Icon", {}).get("URL")
+            if icon:
+                return icon
+        return ""
+    except Exception as e:
+        print(f"Ошибка DuckDuckGo: {e}")
+        return ""
+
 def get_commons_image(person):
     try:
         url = "https://commons.wikimedia.org/w/api.php"
@@ -219,6 +240,9 @@ def get_wiki_image(person, lang):
         return ""
 
 def get_person_image(person):
+    photo = get_duckduckgo_image(person)
+    if photo:
+        return photo
     photo = get_commons_image(person)
     if photo:
         return photo
