@@ -131,6 +131,7 @@ def parse_person_info(content):
 def get_wiki_image(person, lang):
     try:
         url = f"https://{lang}.wikipedia.org/w/api.php"
+        headers = {"User-Agent": "AnimeDirectorBot/1.0"}
         params = {
             "action": "query",
             "format": "json",
@@ -138,7 +139,7 @@ def get_wiki_image(person, lang):
             "srsearch": person,
             "srlimit": 5
         }
-        r = requests.get(url, params=params, timeout=15)
+        r = requests.get(url, params=params, headers=headers, timeout=15)
         r.raise_for_status()
         data = r.json()
         results = data.get("query", {}).get("search", [])
@@ -151,7 +152,7 @@ def get_wiki_image(person, lang):
                 "prop": "pageimages",
                 "piprop": "original"
             }
-            r2 = requests.get(url, params=image_params, timeout=15)
+            r2 = requests.get(url, params=image_params, headers=headers, timeout=15)
             r2.raise_for_status()
             data2 = r2.json()
             pages = data2.get("query", {}).get("pages", {})
@@ -175,9 +176,11 @@ def get_anilist_image(person):
     }
     """
     variables = {"search": person}
+    headers = {"Content-Type": "application/json", "User-Agent": "AnimeDirectorBot/1.0"}
     try:
         r = requests.post("https://graphql.anilist.co",
                           json={"query": query, "variables": variables},
+                          headers=headers,
                           timeout=15)
         r.raise_for_status()
         data = r.json()
@@ -187,15 +190,12 @@ def get_anilist_image(person):
         return ""
 
 def get_person_image(person):
-    # Пробуем английскую Википедию
     photo = get_wiki_image(person, "en")
     if photo:
         return photo
-    # Пробуем русскую Википедию
     photo = get_wiki_image(person, "ru")
     if photo:
         return photo
-    # Пробуем AniList
     photo = get_anilist_image(person)
     if photo:
         return photo
