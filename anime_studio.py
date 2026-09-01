@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import random
 import uuid
 import time
 import urllib3
@@ -177,7 +178,6 @@ def truncate_post(text, max_len=900):
     return result
 
 def get_studio_image(studio):
-    # Попробуем Википедию
     try:
         url = "https://ru.wikipedia.org/w/api.php"
         headers = {"User-Agent": "AnimeStudioBot/1.0"}
