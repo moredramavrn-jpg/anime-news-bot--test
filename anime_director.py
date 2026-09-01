@@ -100,7 +100,7 @@ def get_person_info(person):
     prompt = (
         f"Расскажи о {person}:\n"
         "1. Краткая биография (2-3 предложения).\n"
-        "2. 3-4 лучшие работы с кратким описанием (по одной строке на каждую).\n"
+        "2. Ровно 3 лучшие работы с кратким описанием (по одной строке на каждую).\n"
         "Формат:\n"
         "Биография: <текст>\n"
         "Работы:\n"
@@ -131,6 +131,39 @@ def parse_person_info(content):
 
     return bio, works
 
+def get_person_image(person):
+    """Ищет фото режиссёра через AniList API."""
+    query = """
+    query ($search: String) {
+      Staff(search: $search) {
+        image {
+          large
+        }
+      }
+    }
+    """
+    variables = {"search": person}
+    try:
+        r = requests.post("https://graphql.anilist.co",
+                          json={"query": query, "variables": variables},
+                          timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        image_url = data.get("data", {}).get("Staff", {}).get("image", {}).get("large", "")
+        return image_url
+    except Exception as e:
+        print(f"Ошибка получения фото: {e}")
+        return ""
+
+def download_image(url):
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        print(f"Ошибка скачивания фото: {e}")
+        return None
+
 def main():
     person = get_person()
     if not person:
@@ -145,7 +178,7 @@ def main():
     bio, works = parse_person_info(info)
 
     header = "🎬 <b>Рубрика: о режиссёрах аниме</b>\n\n"
-    name_line = f"🎬 <b>{person}</b>\n"
+    name_line = f"<b>{person}</b>\n"
     separator = "┄┄┄ ✦ ┄┄┄\n"
 
     post = header + name_line + separator
@@ -154,19 +187,29 @@ def main():
         post += f"{bio}\n\n"
 
     if works:
-        post += "<b>Среди лучших работ:</b>\n\n"
-        for work in works[:4]:
-            post += f"— {work}\n"
+        post += "<b>Среди лучших работ:</b>\n"
+        for work in works[:3]:
+            post += f"\n— {work}\n"
 
     post += "\n#аниме #режиссёр #мангака"
 
-    bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+    # Получаем фото режиссёра
+    photo_url = get_person_image(person)
+    if photo_url:
+        photo_bytes = download_image(photo_url)
+        if photo_bytes:
+            bot.send_photo(CHANNEL_ID, photo_bytes, caption=post[:1024], parse_mode='HTML')
+            print("Пост с фото опубликован.")
+        else:
+            bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+            print("Пост без фото опубликован.")
+    else:
+        bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
+        print("Пост без фото опубликован.")
 
     persons = load_used_persons()
     persons.append(person)
     save_used_persons(persons)
-
-    print("Пост опубликован.")
 
 if __name__ == "__main__":
     main()
