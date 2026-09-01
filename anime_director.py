@@ -69,7 +69,11 @@ def giga_request(prompt, max_tokens=500):
         "max_tokens": max_tokens
     }
     try:
-        r = requests.post("https://api.giga.chat/v1/chat/completions", headers=headers, json=payload, timeout=30, verify=False)
+        r = requests.post("https://api.giga.chat/v1/chat/completions",
+                          headers=headers,
+                          json=payload,
+                          timeout=30,
+                          verify=False)
         r.raise_for_status()
         data = r.json()
         return data["choices"][0]["message"]["content"].strip()
