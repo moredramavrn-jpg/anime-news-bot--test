@@ -97,8 +97,39 @@ def get_person():
     return giga_request(prompt, max_tokens=50).strip()
 
 def get_person_info(person):
-    prompt = f"Расскажи о {person}: интересные факты, лучшие работы. Выведи не более 5 предложений."
-    return giga_request(prompt, max_tokens=500).strip()
+    prompt = (
+        f"Расскажи о {person}:\n"
+        "1. Краткая биография (2-3 предложения).\n"
+        "2. 3-4 лучшие работы с кратким описанием (по одной строке на каждую).\n"
+        "Формат:\n"
+        "Биография: <текст>\n"
+        "Работы:\n"
+        "- Название — описание\n"
+        "- Название — описание\n"
+        "- Название — описание"
+    )
+    content = giga_request(prompt, max_tokens=700)
+    return content
+
+def parse_person_info(content):
+    bio = ""
+    works = []
+
+    lines = content.split('\n')
+    mode = None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Биография:"):
+            bio = line.replace("Биография:", "").strip()
+            mode = "bio"
+        elif line.startswith("Работы:"):
+            mode = "works"
+        elif mode == "works" and line.startswith("- "):
+            work = line[2:].strip()
+            if work:
+                works.append(work)
+
+    return bio, works
 
 def main():
     person = get_person()
@@ -111,7 +142,24 @@ def main():
         print("Не удалось получить информацию")
         return
 
-    post = f"🎬 <b>{person}</b>\n\n{info}\n\n#аниме #режиссёр #мангака"
+    bio, works = parse_person_info(info)
+
+    header = "🎬 <b>Рубрика: о режиссёрах аниме</b>\n\n"
+    name_line = f"🎬 <b>{person}</b>\n"
+    separator = "┄┄┄ ✦ ┄┄┄\n"
+
+    post = header + name_line + separator
+
+    if bio:
+        post += f"{bio}\n\n"
+
+    if works:
+        post += "<b>Среди лучших работ:</b>\n\n"
+        for work in works[:4]:
+            post += f"— {work}\n"
+
+    post += "\n#аниме #режиссёр #мангака"
+
     bot.send_message(CHANNEL_ID, post, parse_mode='HTML', disable_web_page_preview=True)
 
     persons = load_used_persons()
