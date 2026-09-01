@@ -132,17 +132,17 @@ def get_studio():
 def get_studio_info(studio):
     prompt = (
         f"Расскажи о студии {studio}:\n"
-        "1. История студии и её особенности (3-4 предложения).\n"
-        "2. Ровно 3 лучшие работы, просто названия с очень кратким пояснением в 3-5 слов.\n"
+        "1. История студии и особенности — РОВНО 3 предложения.\n"
+        "2. Ровно 3 лучшие работы — ТОЛЬКО названия, без описаний.\n"
         "Формат строго:\n"
-        "Биография: <текст>\n"
+        "Биография: <текст из 3 предложений>\n"
         "Работы:\n"
-        "- Название — краткое пояснение\n"
-        "- Название — краткое пояснение\n"
-        "- Название — краткое пояснение\n"
-        "Не пиши работы в одну строку."
+        "- Название\n"
+        "- Название\n"
+        "- Название\n"
+        "Не пиши описания работ."
     )
-    result = giga_request(prompt, max_tokens=600)
+    result = giga_request(prompt, max_tokens=400)
     return result if result else ""
 
 def parse_studio_info(content):
@@ -162,11 +162,11 @@ def parse_studio_info(content):
                 work = re.sub(r'^[-–—•]\s*', '', line)
                 if work:
                     works.append(work)
-            elif line and (' — ' in line or ' – ' in line):
+            elif line:
                 works.append(line)
     return bio, works
 
-def truncate_post(text, max_len=900):
+def truncate_post(text, max_len=850):
     if len(text) <= max_len:
         return text
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -256,7 +256,7 @@ def main():
             post += f"\n— {work}\n"
     post += "\n#аниме #студия"
 
-    caption = truncate_post(post, 900)
+    caption = truncate_post(post, 850)
 
     photo_url = get_studio_image(studio)
     if photo_url:
