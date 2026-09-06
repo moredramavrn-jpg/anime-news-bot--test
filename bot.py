@@ -6,6 +6,7 @@ import json
 import base64
 import uuid
 import time
+import random
 import urllib3
 import feedparser
 import telebot
@@ -239,24 +240,47 @@ def extract_full_text_from_page(soup):
         for elem in soup.select(bad_selector):
             elem.decompose()
 
-    # Сначала пробуем селекторы для Cybersport
-    main_content = soup.select_one('div.editor-body')
+    # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
+    # Проверяем, что это страница Cybersport
+    meta_og_url = soup.find('meta', property='og:url')
+    is_cybersport = meta_og_url and 'cybersport.ru' in meta_og_url.get('content', '')
+
+    if is_cybersport:
+        # Ищем основной контент на Cybersport
+        main_content = soup.select_one('div.text-content.js-mediator-article')
+        if not main_content:
+            main_content = soup.select_one('div.text-content')
+        if not main_content:
+            main_content = soup.select_one('div.content_5HuK5')
+        if not main_content:
+            main_content = soup.select_one('article div.text-content')
+        
+        if main_content:
+            # Извлекаем текст из всех параграфов
+            text_parts = []
+            for p in main_content.find_all(['p', 'div.paragraph']):
+                text = p.get_text(strip=True)
+                if text and len(text) > 10:  # Игнорируем слишком короткие
+                    text_parts.append(text)
+            
+            # Если есть видео-блоки, добавляем отметку
+            video_blocks = main_content.find_all('div', class_='embed-block--youtube')
+            if video_blocks:
+                text_parts.append("[ВИДЕО В СТАТЬЕ]")
+            
+            full_text = '\n\n'.join(text_parts)
+            if full_text:
+                return full_text[:3000]
+            
+            # Если не нашли через p, пробуем просто получить весь текст
+            return clean_html(str(main_content))[:3000]
+
+    # ---------- ДЛЯ ДРУГИХ САЙТОВ ----------
+    main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
-        main_content = soup.select_one('div.article-body')
+        main_content = soup.select_one('div.news_text')  # КГ-Портал
     if not main_content:
-        main_content = soup.select_one('div.news-content')
-    if not main_content:
-        main_content = soup.select_one('div.content')
-    
-    # Потом для Goha
-    if not main_content:
-        main_content = soup.select_one('div.editor-body')
-    # Потом для КГ-Портал
-    if not main_content:
-        main_content = soup.select_one('div.news_text')
-    # Потом для Shikimori
-    if not main_content:
-        main_content = soup.select_one('div.body-inner')
+        main_content = soup.select_one('div.body-inner')  # Shikimori
 
     if not main_content:
         selectors = [
@@ -272,7 +296,8 @@ def extract_full_text_from_page(soup):
                 break
 
     if main_content:
-        return clean_html(str(main_content))
+        return clean_html(str(main_content))[:3000]
+    
     return ""
 
 def fetch_full_text(entry):
@@ -292,26 +317,13 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
-    # Cybersport
-    if 'cybersport.ru' in link:
+    # Cybersport - используем обновлённую функцию
+    if link:
         soup = get_page_soup(link)
         if soup:
-            # Ищем основной контент как на Shikimori
-            main_content = soup.select_one('div.editor-body')
-            if not main_content:
-                main_content = soup.select_one('div.article-body')
-            if not main_content:
-                main_content = soup.select_one('div.news-content')
-            
-            if main_content:
-                full_text = clean_html(str(main_content))
-                if full_text:
-                    return full_text[:2000]
-        
-        summary = entry.get('summary', '') or entry.get('description', '')
-        if summary:
-            return clean_html(summary)
-        return ""
+            full_text = extract_full_text_from_page(soup)
+            if full_text and len(full_text) > 50:
+                return full_text[:3000]
 
     # Goha, KG-Portal и другие
     if link:
@@ -447,6 +459,23 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
+    # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
+    # Проверяем YouTube вставки
+    youtube_blocks = soup.select('div.embed-block--youtube')
+    for block in youtube_blocks:
+        # Ищем iframe внутри
+        iframe = block.find('iframe')
+        if iframe and iframe.get('src'):
+            url = iframe['src']
+            if is_youtube_video(url):
+                return url, True
+    
+    # Ищем любые iframe с YouTube
+    iframe = soup.select_one('iframe[src*="youtube.com/embed"], iframe[src*="youtu.be/"]')
+    if iframe and iframe.get('src'):
+        return iframe['src'], True
+
+    # ---------- ОСТАЛЬНОЙ КОД ----------
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -467,10 +496,6 @@ def extract_video_url_from_page(soup):
         url = yt_tag['url']
         if is_youtube_video(url):
             return url, True
-
-    iframe = soup.select_one('iframe[src*="youtube.com/embed"], iframe[src*="youtu.be/"]')
-    if iframe and iframe.get('src'):
-        return iframe['src'], True
 
     if og_video and og_video.get('content'):
         url = og_video['content']
@@ -834,10 +859,23 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     title, body = rewrite_news(title, body)
 
+    # Ограничиваем длину тела новости (для Telegram)
+    MAX_TEXT_LENGTH = 2500
+    if body and len(body) > MAX_TEXT_LENGTH:
+        body = truncate_by_words(body, MAX_TEXT_LENGTH)
+        if not body.endswith('...'):
+            body += '...'
+
     if video_url or image_url:
         full_message = build_caption_fit(title, body, emoji, 1024)
     else:
         full_message = build_post_html(title, body, emoji)
+        # Для текстовых сообщений ограничение 4096
+        if len(full_message) > 4096:
+            body = body[:2000] + '...'
+            full_message = build_post_html(title, body, emoji)
+            if len(full_message) > 4096:
+                full_message = full_message[:4093] + '...'
 
     if video_url and not is_youtube:
         try:
@@ -873,7 +911,14 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
+    # Проверяем длину перед отправкой
+    if len(full_message) > 4096:
+        # Разбиваем на несколько сообщений
+        for i in range(0, len(full_message), 4096):
+            part = full_message[i:i+4096]
+            bot.send_message(CHANNEL_ID, part, parse_mode='HTML', disable_web_page_preview=True)
+    else:
+        bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
 # ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА SHIKIMORI ----------
 def fetch_shikimori_news_from_main_page():
@@ -970,6 +1015,8 @@ def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
     new_posts = 0
+    
+    print(f"Загружено {len(links)} ссылок и {len(titles)} заголовков")
 
     # ----- 1. Shikimori -----
     print("Обрабатываю новости Shikimori...")
@@ -1013,19 +1060,28 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 2. Cybersport /tags/anime (как Shikimori) -----
+    # ----- 2. Cybersport /tags/anime -----
     print("Обрабатываю новости Cybersport (тег аниме)...")
     cybersport_news = fetch_cybersport_anime_news()
+    print(f"Найдено {len(cybersport_news)} новостей на Cybersport")
+    
     for news in cybersport_news:
         link = news['link']
         title = news['title']
+        
+        # Проверяем дубликат
         if is_duplicate(link, title, links, titles):
             print(f"Дубликат пропущен: {title}")
             continue
 
-        # ТОЧНО КАК В SHIKIMORI
+        # Загружаем страницу и получаем полный текст
         soup = get_page_soup(link)
+        if not soup:
+            print(f"Не удалось загрузить страницу: {link}")
+            continue
+            
         full_text = fetch_full_text({'link': link, 'title': title})
+        print(f"Длина текста: {len(full_text) if full_text else 0}")
 
         if full_text:
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
@@ -1039,7 +1095,11 @@ def main():
             continue
 
         image_url = news.get('image_url')
+        if not image_url:
+            image_url = fetch_image_url({'link': link}, soup)
+            
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
+        print(f"Видео найдено: {video_url[:50] if video_url else 'нет'}")
 
         name_pairs = extract_russian_anime_names(soup)
         if name_pairs:
@@ -1052,7 +1112,7 @@ def main():
             titles.add(normalize_title(title))
             recent_titles.append({"title": title, "timestamp": time.time()})
             new_posts += 1
-            print(f"Опубликовано: {title}")
+            print(f"Опубликовано (Cybersport): {title}")
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
@@ -1101,6 +1161,7 @@ def main():
         save_posted(links, titles)
         save_recent_titles(recent_titles)
         print(f"Сохранено {new_posts} новых записей в {POSTED_FILE}")
+        print(f"Всего: {len(links)} ссылок, {len(titles)} заголовков")
     else:
         print("Новых новостей нет.")
 
