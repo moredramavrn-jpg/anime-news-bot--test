@@ -1019,41 +1019,60 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА CYBERSPORT ----------
+# ---------- НОВАЯ ФУНКЦИЯ ДЛЯ ПАРСИНГА CYBERSPORT ЧЕРЕЗ RSS ----------
 def fetch_cybersport_anime_news():
-    url = "https://www.cybersport.ru/tags/anime?sort=-publishedAt"
-    soup = get_page_soup(url)
-    if not soup:
-        print("Не удалось загрузить страницу Cybersport Anime")
+    """
+    Парсит RSS-ленту Cybersport по тегу 'аниме'
+    и возвращает список словарей: {'title': ..., 'link': ..., 'image_url': ...}
+    """
+    rss_url = "https://www.cybersport.ru/tags/anime?sort=-publishedAt&format=rss"
+    news_items = []
+
+    try:
+        feed = feedparser.parse(rss_url)
+        print(f"  Загружена RSS-лента Cybersport, найдено {len(feed.entries)} записей")
+    except Exception as e:
+        print(f"  Не удалось получить RSS-ленту Cybersport: {e}")
         return []
 
-    news_items = []
-    articles = soup.select('article')
-    for article in articles:
-        link_tag = article.find('a', class_='link_CocWY')
-        if not link_tag:
-            continue
-        link = link_tag.get('href')
-        if link.startswith('/'):
-            link = urljoin('https://www.cybersport.ru', link)
+    for entry in feed.entries[:20]:  # Берём не более 20 последних
+        link = entry.get('link', '')
+        title = entry.get('title', 'Без названия')
 
-        title_tag = article.find('h3', class_='title_nSS03')
-        if not title_tag:
-            continue
-        title = title_tag.get_text(strip=True)
-
-        img_tag = article.find('img')
+        # Извлекаем картинку
         image_url = None
-        if img_tag:
-            src = img_tag.get('src') or img_tag.get('data-src')
-            if src:
-                image_url = urljoin('https://www.cybersport.ru', src)
+        # 1. Пробуем из media_content
+        if 'media_content' in entry:
+            for media in entry.media_content:
+                if 'url' in media:
+                    image_url = media['url']
+                    break
+        # 2. Если нет, пробуем из enclosures
+        if not image_url and 'enclosures' in entry:
+            for enc in entry.enclosures:
+                if 'href' in enc and ('.jpg' in enc['href'] or '.png' in enc['href'] or '.jpeg' in enc['href']):
+                    image_url = enc['href']
+                    break
+        # 3. Если всё ещё нет, пробуем из summary
+        if not image_url and entry.get('summary'):
+            match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', entry['summary'], re.IGNORECASE)
+            if match:
+                image_url = match.group(1)
+
+        # Если картинка найдена, делаем абсолютную ссылку
+        if image_url and not image_url.startswith('http'):
+            image_url = urljoin('https://www.cybersport.ru', image_url)
+
+        # Пропускаем логотипы и SVG
+        if image_url:
+            if 'logo' in image_url.lower() or '.svg' in image_url.lower():
+                image_url = None
 
         news_items.append({
             'title': title,
             'link': link,
             'image_url': image_url,
-            'source': 'cybersport_tag'
+            'source': 'cybersport_rss'
         })
 
     return news_items
@@ -1108,10 +1127,10 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 2. Cybersport -----
-    print("Обрабатываю новости Cybersport (тег аниме)...")
+    # ----- 2. Cybersport (через RSS) -----
+    print("Обрабатываю новости Cybersport (RSS)...")
     cybersport_news = fetch_cybersport_anime_news()
-    print(f"Найдено {len(cybersport_news)} новостей на Cybersport")
+    print(f"Найдено {len(cybersport_news)} новостей в RSS Cybersport")
     
     for news in cybersport_news:
         link = news['link']
@@ -1139,8 +1158,11 @@ def main():
             print(f"Похожая новость пропущена: {title}")
             continue
 
+        # Берём картинку из RSS
         image_url = news.get('image_url')
+        # Если в RSS нет картинки - пробуем найти на странице
         if not image_url:
+            print(f"  Картинки нет в RSS, ищем на странице...")
             image_url = fetch_image_url({'link': link}, soup)
             
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
