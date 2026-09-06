@@ -362,15 +362,40 @@ def fetch_image_url(entry, soup=None):
     if soup is None and link:
         soup = get_page_soup(link)
 
+    image_url = None
+    
+    # 1. Сначала пробуем og:image (самый надежный)
+    if soup:
+        og_image = soup.find('meta', property='og:image')
+        if og_image and og_image.get('content'):
+            image_url = og_image['content']
+            if image_url and '.svg' not in image_url.lower() and 'logo' not in image_url.lower():
+                print(f"  Найдена og:image: {image_url[:80]}")
+                return make_absolute(image_url, link)
+    
+    # 2. Пробуем Twitter image
+    if soup:
+        twitter_image = soup.find('meta', name='twitter:image')
+        if twitter_image and twitter_image.get('content'):
+            image_url = twitter_image['content']
+            if image_url and '.svg' not in image_url.lower() and 'logo' not in image_url.lower():
+                print(f"  Найдена twitter:image: {image_url[:80]}")
+                return make_absolute(image_url, link)
+    
+    # 3. Пробуем extract_image_from_page (но пропускаем SVG и логотипы)
     if soup:
         image = extract_image_from_page(soup, link)
-        if image and 'logo' not in image.lower():
+        if image and '.svg' not in image.lower() and 'logo' not in image.lower():
+            print(f"  Найдена картинка на странице: {image[:80]}")
             return image
 
+    # 4. Пробуем из entry
     image = extract_image_url_from_entry(entry)
-    if image and 'logo' not in image.lower():
+    if image and '.svg' not in image.lower() and 'logo' not in image.lower():
+        print(f"  Найдена картинка из entry: {image[:80]}")
         return image
 
+    print(f"  ❌ Картинка не найдена")
     return None
 
 def extract_image_url_from_entry(entry):
@@ -384,31 +409,65 @@ def extract_image_url_from_entry(entry):
         elif 'cybersport.ru' in link:
             base_domain = 'https://www.cybersport.ru'
 
+    # Проверяем enclosures
     if 'enclosures' in entry and entry.enclosures:
         for enc in entry.enclosures:
             if 'href' in enc:
-                return make_absolute(enc['href'], base_domain)
+                url = enc['href']
+                if '.svg' not in url.lower() and 'logo' not in url.lower():
+                    return make_absolute(url, base_domain)
             if 'url' in enc:
-                return make_absolute(enc['url'], base_domain)
+                url = enc['url']
+                if '.svg' not in url.lower() and 'logo' not in url.lower():
+                    return make_absolute(url, base_domain)
+    
+    # Проверяем media_content
     if 'media_content' in entry:
         for media in entry.media_content:
             if 'url' in media:
-                return make_absolute(media['url'], base_domain)
+                url = media['url']
+                if '.svg' not in url.lower() and 'logo' not in url.lower():
+                    return make_absolute(url, base_domain)
+    
+    # Проверяем media_thumbnail
     if 'media_thumbnail' in entry:
         for media in entry.media_thumbnail:
             if 'url' in media:
-                return make_absolute(media['url'], base_domain)
+                url = media['url']
+                if '.svg' not in url.lower() and 'logo' not in url.lower():
+                    return make_absolute(url, base_domain)
+    
+    # Проверяем summary
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
+        # Ищем img теги
         match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary, re.IGNORECASE)
         if match:
-            return make_absolute(match.group(1), base_domain)
+            url = match.group(1)
+            if '.svg' not in url.lower() and 'logo' not in url.lower():
+                return make_absolute(url, base_domain)
+        
+        # Ищем прямые ссылки на картинки
+        match = re.search(r'https?://[^\s<>"]+\.(jpg|jpeg|png|webp)', summary, re.IGNORECASE)
+        if match:
+            return make_absolute(match.group(0), base_domain)
+    
+    # Проверяем content
     content = entry.get('content', [])
     for c in content:
         if 'value' in c:
+            # Ищем img теги
             match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', c['value'], re.IGNORECASE)
             if match:
-                return make_absolute(match.group(1), base_domain)
+                url = match.group(1)
+                if '.svg' not in url.lower() and 'logo' not in url.lower():
+                    return make_absolute(url, base_domain)
+            
+            # Ищем прямые ссылки
+            match = re.search(r'https?://[^\s<>"]+\.(jpg|jpeg|png|webp)', c['value'], re.IGNORECASE)
+            if match:
+                return make_absolute(match.group(0), base_domain)
+    
     return None
 
 # ---------- Видео ----------
@@ -453,7 +512,7 @@ def extract_video_url_from_page(soup):
             url = iframe['src']
             if 'logo' in url.lower():
                 continue
-            if is_youtube_video(url):
+            if 'youtube' in url or 'youtu.be' in url:
                 return url, True
     
     # 2. Любые iframe
@@ -462,25 +521,25 @@ def extract_video_url_from_page(soup):
         src = iframe.get('src', '')
         if 'logo' in src.lower() or 'sponsor' in src.lower() or 'banner' in src.lower():
             continue
-        if src and is_youtube_video(src):
+        if src and ('youtube' in src or 'youtu.be' in src):
             return src, True
     
-    # 3. Прямые ссылки
+    # 3. Прямые ссылки на YouTube
     for a in soup.find_all('a', href=True):
         href = a['href']
         if 'logo' in href.lower():
             continue
-        if is_youtube_video(href):
+        if 'youtube.com/watch' in href or 'youtu.be/' in href:
             return href, True
     
     # 4. Meta og:video
     og_video = soup.find('meta', property='og:video')
     if og_video and og_video.get('content'):
         url = og_video['content']
-        if is_youtube_video(url):
+        if 'youtube' in url or 'youtu.be' in url:
             return url, True
     
-    # 5. video теги
+    # 5. video теги (для MP4 и других)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -495,13 +554,6 @@ def extract_video_url_from_page(soup):
                 return None, False
             if re.search(r'\.(mp4|webm)(\?.*)?$', src, re.IGNORECASE):
                 return src, False
-    
-    # 6. editor-body-youtube (для Goha)
-    yt_tag = soup.select_one('editor-body-youtube')
-    if yt_tag and yt_tag.get('url'):
-        url = yt_tag['url']
-        if is_youtube_video(url):
-            return url, True
 
     return None, False
 
@@ -519,6 +571,15 @@ def fetch_video_info(entry, soup=None):
 
 def download_image(url, referer=None):
     try:
+        # Проверяем размер изображения
+        head = requests.head(url, timeout=10)
+        content_length = head.headers.get('content-length')
+        if content_length:
+            size_mb = int(content_length) / (1024 * 1024)
+            if size_mb > 10:
+                print(f"  Изображение слишком большое ({size_mb:.1f}MB), пропускаем")
+                return None
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
@@ -847,41 +908,50 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             if len(full_message) > 4096:
                 full_message = full_message[:4093] + '...'
 
-    # --- ЕСЛИ ЕСТЬ ВИДЕО (YouTube) ---
-    if video_url and is_youtube:
-        try:
-            # Пробуем отправить как видео (если ссылка на прямой файл)
-            if 'youtu.be' in video_url or 'youtube.com' in video_url:
+    # --- ЕСЛИ ЕСТЬ ВИДЕО ---
+    if video_url:
+        # Проверяем, что это не логотип
+        if 'logo' in video_url.lower():
+            print(f"Пропускаем логотип: {video_url}")
+            video_url = None
+        else:
+            # Проверяем, YouTube ли это
+            is_yt = is_youtube_video(video_url)
+            
+            if is_yt:
                 # Это YouTube - отправляем ссылку
                 short_url = to_short_youtube_url(video_url)
-                bot.send_message(
-                    CHANNEL_ID,
-                    full_message + f"\n\n🎬 Смотреть видео: {short_url}",
-                    parse_mode='HTML',
-                    disable_web_page_preview=False
-                )
-                return
+                try:
+                    bot.send_message(
+                        CHANNEL_ID,
+                        full_message + f"\n\n🎬 Смотреть видео: {short_url}",
+                        parse_mode='HTML',
+                        disable_web_page_preview=False
+                    )
+                    return
+                except Exception as e:
+                    print(f"Не удалось отправить ссылку на видео: {e}")
             else:
-                # Пробуем отправить как видео
-                bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
-                return
-        except Exception as e:
-            print(f"Не удалось отправить видео: {e}")
-            # Если не получилось - отправляем ссылку
-            if video_url:
-                bot.send_message(
-                    CHANNEL_ID,
-                    full_message + f"\n\n🎬 Видео: {video_url}",
-                    parse_mode='HTML',
-                    disable_web_page_preview=False
-                )
-                return
+                # Это не YouTube - пробуем отправить как видео
+                try:
+                    bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
+                    return
+                except Exception as e:
+                    print(f"Не удалось отправить видео: {e}")
+                    # Если не получилось - отправляем ссылку
+                    bot.send_message(
+                        CHANNEL_ID,
+                        full_message + f"\n\n🎬 Видео: {video_url}",
+                        parse_mode='HTML',
+                        disable_web_page_preview=False
+                    )
+                    return
 
     # --- ЕСЛИ ЕСТЬ ИЗОБРАЖЕНИЕ ---
     if image_url:
-        # Проверяем, что это не логотип
-        if 'logo' in image_url.lower():
-            print(f"Пропускаем логотип: {image_url}")
+        # Проверяем, что это не логотип и не SVG
+        if 'logo' in image_url.lower() or '.svg' in image_url.lower():
+            print(f"Пропускаем логотип/SVG: {image_url}")
             image_url = None
         else:
             image_file = download_image(image_url, referer=link)
@@ -891,6 +961,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
                     return
                 except Exception as e:
                     print(f"Не удалось отправить фото: {e}")
+                    # Если фото не отправилось - пробуем без фото
+                    pass
 
     # --- ОТПРАВКА ТЕКСТОМ ---
     if len(full_message) > 4096:
