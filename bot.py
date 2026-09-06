@@ -24,11 +24,13 @@ GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss"
+    "https://kg-portal.ru/rss/news_anime.rss",
+    "https://www.cybersport.ru/rss/materials"
 ]
 
+ANIME_KEYWORDS = ["аниме", "anime", "манга", "manga", "ранобэ", "ranobe"]
+
 SHIKIMORI_MAIN = "https://shikimori.io/"
-CYBERSPORT_ANIME = "https://www.cybersport.ru/tags/anime?sort=-publishedAt"
 
 POSTED_FILE = "posted.txt"
 RECENT_TITLES_FILE = "recent_titles.json"
@@ -245,9 +247,6 @@ def extract_full_text_from_page(soup):
         main_content = soup.select_one('div.body-inner')  # Shikimori
 
     if not main_content:
-        main_content = soup.select_one('div.article-content') or soup.select_one('div.article__text')  # Cybersport
-
-    if not main_content:
         selectors = [
             'article', 'div.news-content', 'div.content', 'div.news-text',
             'div.post-content', 'div.entry-content', 'div.article-content',
@@ -280,13 +279,6 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
-    if 'cybersport' in link:
-        soup = get_page_soup(link)
-        if soup:
-            full_text = extract_full_text_from_page(soup)
-            if full_text:
-                return full_text[:2000]
-
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -309,8 +301,7 @@ def extract_image_from_page(soup, page_url=None):
         'div.article_image img', 'div.full_news img',
         'div.news_content img', 'div.news-full__text img',
         'div.b-shiki_editor img', 'div.shiki_editor img',
-        'div.b-shiki_wall img',
-        'div.article__image img', 'img.article__image'
+        'div.b-shiki_wall img'
     ]
 
     for selector in selectors:
@@ -319,17 +310,17 @@ def extract_image_from_page(soup, page_url=None):
             src = (img_tag.get('src') or img_tag.get('data-src') or
                    img_tag.get('data-original') or img_tag.get('data-lazy-src'))
             if src:
-                return make_absolute(src, page_url or 'https://www.cybersport.ru')
+                return make_absolute(src, page_url or 'https://shikimori.one')
 
     og_image = soup.select_one('meta[property="og:image"]')
     if og_image and og_image.get('content'):
-        return make_absolute(og_image['content'], page_url or 'https://www.cybersport.ru')
+        return make_absolute(og_image['content'], page_url or 'https://shikimori.one')
 
     for img in soup.find_all('img'):
         src = (img.get('src') or img.get('data-src') or
                img.get('data-original') or img.get('data-lazy-src'))
         if src and re.search(r'\.(jpg|jpeg|png|webp)(\?.*)?$', src, re.IGNORECASE):
-            return make_absolute(src, page_url or 'https://www.cybersport.ru')
+            return make_absolute(src, page_url or 'https://shikimori.one')
 
     return None
 
@@ -361,6 +352,12 @@ def extract_image_url_from_entry(entry):
         elif 'cybersport.ru' in link:
             base_domain = 'https://www.cybersport.ru'
 
+    if 'enclosures' in entry and entry.enclosures:
+        for enc in entry.enclosures:
+            if 'href' in enc:
+                return make_absolute(enc['href'], base_domain)
+            if 'url' in enc:
+                return make_absolute(enc['url'], base_domain)
     if 'media_content' in entry:
         for media in entry.media_content:
             if 'url' in media:
@@ -369,12 +366,6 @@ def extract_image_url_from_entry(entry):
         for media in entry.media_thumbnail:
             if 'url' in media:
                 return make_absolute(media['url'], base_domain)
-    if 'enclosures' in entry and entry.enclosures:
-        for enc in entry.enclosures:
-            if 'href' in enc and enc.get('type', '').startswith('image'):
-                return make_absolute(enc['href'], base_domain)
-            if 'url' in enc and enc.get('type', '').startswith('image'):
-                return make_absolute(enc['url'], base_domain)
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary, re.IGNORECASE)
@@ -894,36 +885,6 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-def fetch_cybersport_news():
-    soup = get_page_soup(CYBERSPORT_ANIME)
-    if not soup:
-        return []
-
-    news_items = []
-    seen_links = set()
-
-    for article in soup.select("article, div.news-item, div.article"):
-        link_tag = article.select_one("a[href*='/news/']") or article.select_one("a[href*='/articles/']")
-        if not link_tag:
-            continue
-        title = link_tag.get_text(strip=True)
-        link = link_tag.get("href")
-        if not link.startswith("http"):
-            link = urljoin("https://www.cybersport.ru", link)
-
-        img_tag = article.select_one("img")
-        image_url = None
-        if img_tag:
-            src = img_tag.get("src") or img_tag.get("data-src") or img_tag.get("data-original")
-            if src:
-                image_url = make_absolute(src, "https://www.cybersport.ru")
-
-        if link not in seen_links:
-            news_items.append({"title": title, "link": link, "image_url": image_url})
-            seen_links.add(link)
-
-    return news_items
-
 def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
@@ -970,35 +931,6 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    print("Обрабатываю новости Cybersport...")
-    cybersport_news = fetch_cybersport_news()
-    for news in cybersport_news:
-        link = news['link']
-        title = news['title']
-        if is_duplicate(link, title, links, titles):
-            print(f"Дубликат пропущен: {title}")
-            continue
-
-        soup = get_page_soup(link)
-        full_text = fetch_full_text({'link': link, 'title': title})
-
-        if is_similar_news(title, full_text, recent_titles):
-            print(f"Похожая новость пропущена: {title}")
-            continue
-
-        image_url = news.get('image_url')
-        video_url, is_youtube = fetch_video_info({'link': link}, soup)
-
-        try:
-            send_post(title, full_text, link, image_url, video_url, is_youtube)
-            links.add(link)
-            titles.add(normalize_title(title))
-            recent_titles.append({"title": title, "timestamp": time.time()})
-            new_posts += 1
-            print(f"Опубликовано: {title}")
-        except Exception as e:
-            print(f"Ошибка отправки для {link}: {e}")
-
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
@@ -1007,13 +939,19 @@ def main():
             print(f"Не удалось получить ленту {rss_url}: {e}")
             continue
 
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:20]:
             if is_podcast_entry(entry):
                 print(f"Пропущен подкаст: {entry.get('title')}")
                 continue
 
             link = entry.get('link', '')
             title = entry.get('title', 'Без названия')
+
+            # Фильтр для Cybersport: только аниме-новости
+            if 'cybersport.ru' in link:
+                if not any(kw in (title + " " + link).lower() for kw in ANIME_KEYWORDS):
+                    continue
+
             if is_duplicate(link, title, links, titles):
                 print(f"Дубликат пропущен: {title}")
                 continue
