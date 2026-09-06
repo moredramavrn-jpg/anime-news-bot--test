@@ -239,12 +239,24 @@ def extract_full_text_from_page(soup):
         for elem in soup.select(bad_selector):
             elem.decompose()
 
-    main_content = soup.select_one('div.editor-body')  # Goha.ru
+    # Сначала пробуем селекторы для Cybersport
+    main_content = soup.select_one('div.editor-body')
     if not main_content:
-        main_content = soup.select_one('div.news_text')  # КГ-Портал
-
+        main_content = soup.select_one('div.article-body')
     if not main_content:
-        main_content = soup.select_one('div.body-inner')  # Shikimori
+        main_content = soup.select_one('div.news-content')
+    if not main_content:
+        main_content = soup.select_one('div.content')
+    
+    # Потом для Goha
+    if not main_content:
+        main_content = soup.select_one('div.editor-body')
+    # Потом для КГ-Портал
+    if not main_content:
+        main_content = soup.select_one('div.news_text')
+    # Потом для Shikimori
+    if not main_content:
+        main_content = soup.select_one('div.body-inner')
 
     if not main_content:
         selectors = [
@@ -266,6 +278,7 @@ def extract_full_text_from_page(soup):
 def fetch_full_text(entry):
     link = entry.get('link', '')
 
+    # Shikimori
     if 'shikimori' in link:
         soup = get_page_soup(link)
         if soup:
@@ -279,12 +292,35 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
+    # Cybersport
+    if 'cybersport.ru' in link:
+        soup = get_page_soup(link)
+        if soup:
+            # Ищем основной контент как на Shikimori
+            main_content = soup.select_one('div.editor-body')
+            if not main_content:
+                main_content = soup.select_one('div.article-body')
+            if not main_content:
+                main_content = soup.select_one('div.news-content')
+            
+            if main_content:
+                full_text = clean_html(str(main_content))
+                if full_text:
+                    return full_text[:2000]
+        
+        summary = entry.get('summary', '') or entry.get('description', '')
+        if summary:
+            return clean_html(summary)
+        return ""
+
+    # Goha, KG-Portal и другие
     if link:
         soup = get_page_soup(link)
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
                 return full_text[:2000]
+    
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -886,7 +922,7 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-# ---------- НОВАЯ ФУНКЦИЯ ДЛЯ ПАРСИНГА СТРАНИЦЫ ТЕГА АНИМЕ НА CYBERSPORT ----------
+# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА СТРАНИЦЫ ТЕГА АНИМЕ НА CYBERSPORT ----------
 def fetch_cybersport_anime_news():
     """
     Парсит страницу https://www.cybersport.ru/tags/anime
@@ -977,30 +1013,33 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 2. НОВЫЙ ИСТОЧНИК: Cybersport /tags/anime -----
+    # ----- 2. Cybersport /tags/anime (как Shikimori) -----
     print("Обрабатываю новости Cybersport (тег аниме)...")
     cybersport_news = fetch_cybersport_anime_news()
     for news in cybersport_news:
         link = news['link']
         title = news['title']
         if is_duplicate(link, title, links, titles):
-            print(f"Дубликат пропущен (Cybersport): {title}")
+            print(f"Дубликат пропущен: {title}")
             continue
 
-        # Получаем полный текст статьи
-        entry = {'link': link, 'title': title}
+        # ТОЧНО КАК В SHIKIMORI
         soup = get_page_soup(link)
-        full_text = fetch_full_text(entry)
+        full_text = fetch_full_text({'link': link, 'title': title})
+
+        if full_text:
+            sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
+            if sentences:
+                title = sentences[0]
+                full_text = ' '.join(sentences[1:])
+            full_text = remove_duplicate_start(title, full_text)
 
         if is_similar_news(title, full_text, recent_titles):
-            print(f"Похожая новость пропущена (Cybersport): {title}")
+            print(f"Похожая новость пропущена: {title}")
             continue
 
         image_url = news.get('image_url')
-        if not image_url:
-            image_url = fetch_image_url(entry, soup)
-
-        video_url, is_youtube = fetch_video_info(entry, soup)
+        video_url, is_youtube = fetch_video_info({'link': link}, soup)
 
         name_pairs = extract_russian_anime_names(soup)
         if name_pairs:
@@ -1013,7 +1052,7 @@ def main():
             titles.add(normalize_title(title))
             recent_titles.append({"title": title, "timestamp": time.time()})
             new_posts += 1
-            print(f"Опубликовано (Cybersport): {title}")
+            print(f"Опубликовано: {title}")
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
