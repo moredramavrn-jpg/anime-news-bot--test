@@ -30,13 +30,7 @@ RSS_URLS = [
 SHIKIMORI_MAIN = "https://shikimori.io/"
 
 POSTED_FILE = "posted.txt"
-LAST_POST_TIME_FILE = "last_post_time.txt"
-
-# Параметры ограничений
-QUIET_HOURS_START = 22   # час начала тишины (UTC)
-QUIET_HOURS_END = 9      # час окончания тишины (UTC)
-MIN_INTERVAL_SECONDS = 3600  # минимальный интервал между постами (1 час)
-MAX_POSTS_PER_RUN = 1    # максимум постов за один запуск
+RECENT_TITLES_FILE = "recent_titles.json"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -79,6 +73,98 @@ def is_duplicate(link, title, links, titles):
         if SequenceMatcher(None, norm_title, existing_title).ratio() > 0.9:
             return True
     return False
+
+# ---------- Хранение недавних заголовков ----------
+def load_recent_titles():
+    if os.path.exists(RECENT_TITLES_FILE):
+        with open(RECENT_TITLES_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+def save_recent_titles(titles):
+    cutoff = time.time() - 7 * 86400
+    titles = [t for t in titles if t.get("timestamp", 0) > cutoff]
+    with open(RECENT_TITLES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(titles, f, ensure_ascii=False)
+
+# ---------- GigaChat API ----------
+def get_gigachat_token():
+    global gigachat_access_token, gigachat_token_expires_at
+
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
+    try:
+        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
+        r.raise_for_status()
+        token_data = r.json()
+        gigachat_access_token = token_data.get("access_token")
+        expires_at = token_data.get("expires_at")
+        if expires_at:
+            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+        else:
+            gigachat_token_expires_at = time.time() + 1800
+        return gigachat_access_token
+    except Exception as e:
+        print(f"Ошибка получения токена GigaChat: {e}")
+        return None
+
+def giga_request(prompt, max_tokens=500):
+    token = get_gigachat_token()
+    if not token:
+        return ""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeNewsBot/1.0"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {"role": "system", "content": "Ты — помощник для проверки новостей."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": max_tokens
+    }
+    try:
+        r = requests.post("https://api.giga.chat/v1/chat/completions",
+                          headers=headers, json=payload, timeout=30, verify=False)
+        r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"Ошибка GigaChat: {e}")
+        return ""
+
+def is_similar_news(title, body, recent_titles):
+    """Проверяет через GigaChat, является ли новость дубликатом по смыслу."""
+    if not recent_titles:
+        return False
+
+    recent = '\n'.join([t["title"] for t in recent_titles[-20:]])
+    prompt = f"""Сравни новую новость с уже опубликованными за последние 7 дней.
+
+Новая новость:
+Заголовок: {title}
+Текст: {body[:500]}
+
+Уже опубликованные:
+{recent}
+
+Ответь только "да", если новая новость по сути такая же (дубликат), иначе "нет"."""
+    answer = giga_request(prompt, max_tokens=10)
+    return answer.strip().lower() == "да"
 
 # ---------- HTML / парсинг ----------
 def clean_html(raw_html):
@@ -563,36 +649,6 @@ def is_podcast_entry(entry):
         return True
     return False
 
-# ---------- GigaChat API ----------
-def get_gigachat_token():
-    global gigachat_access_token, gigachat_token_expires_at
-
-    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
-        return gigachat_access_token
-
-    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
-    }
-    data = {"scope": "GIGACHAT_API_PERS"}
-    try:
-        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
-        r.raise_for_status()
-        token_data = r.json()
-        gigachat_access_token = token_data.get("access_token")
-        expires_at = token_data.get("expires_at")
-        if expires_at:
-            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
-        else:
-            gigachat_token_expires_at = time.time() + 1800
-        return gigachat_access_token
-    except Exception as e:
-        print(f"Ошибка получения токена GigaChat: {e}")
-        return None
-
 def remove_duplicate_start(title, body):
     if not title or not body:
         return body
@@ -825,44 +881,14 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-# ---------- Ограничения времени ----------
-def is_quiet_time():
-    current_hour = time.gmtime().tm_hour
-    if QUIET_HOURS_START <= current_hour or current_hour < QUIET_HOURS_END:
-        return True
-    return False
-
-def load_last_post_time():
-    if os.path.exists(LAST_POST_TIME_FILE):
-        try:
-            with open(LAST_POST_TIME_FILE, 'r') as f:
-                return float(f.read().strip())
-        except:
-            return 0
-    return 0
-
-def save_last_post_time(timestamp):
-    with open(LAST_POST_TIME_FILE, 'w') as f:
-        f.write(str(timestamp))
-
 def main():
     links, titles = load_posted()
+    recent_titles = load_recent_titles()
     new_posts = 0
-
-    if is_quiet_time():
-        print("Тихое время, посты не публикуются.")
-        return
-
-    last_post_time = load_last_post_time()
-    if last_post_time and (time.time() - last_post_time) < MIN_INTERVAL_SECONDS:
-        print("Интервал между постами ещё не прошёл.")
-        return
 
     print("Обрабатываю новости Shikimori с главной страницы...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
-        if new_posts >= MAX_POSTS_PER_RUN:
-            break
         link = news['link']
         title = news['title']
         if is_duplicate(link, title, links, titles):
@@ -871,6 +897,19 @@ def main():
 
         soup = get_page_soup(link)
         full_text = fetch_full_text({'link': link, 'title': title})
+
+        # Убираем дублирование: заголовок = первое предложение, остальное = тело
+        if full_text:
+            sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
+            if sentences:
+                title = sentences[0]
+                full_text = ' '.join(sentences[1:])
+            full_text = remove_duplicate_start(title, full_text)
+
+        if is_similar_news(title, full_text, recent_titles):
+            print(f"Похожая новость пропущена: {title}")
+            continue
+
         image_url = news.get('image_url')
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
 
@@ -883,15 +922,13 @@ def main():
             send_post(title, full_text, link, image_url, video_url, is_youtube)
             links.add(link)
             titles.add(normalize_title(title))
+            recent_titles.append({"title": title, "timestamp": time.time()})
             new_posts += 1
-            save_last_post_time(time.time())
             print(f"Опубликовано: {title}")
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
     for rss_url in RSS_URLS:
-        if new_posts >= MAX_POSTS_PER_RUN:
-            break
         print(f"Обрабатываю ленту: {rss_url}")
         try:
             feed = feedparser.parse(rss_url)
@@ -900,8 +937,6 @@ def main():
             continue
 
         for entry in feed.entries[:10]:
-            if new_posts >= MAX_POSTS_PER_RUN:
-                break
             if is_podcast_entry(entry):
                 print(f"Пропущен подкаст: {entry.get('title')}")
                 continue
@@ -914,6 +949,11 @@ def main():
 
             soup = get_page_soup(link) if link else None
             full_text = fetch_full_text(entry)
+
+            if is_similar_news(title, full_text, recent_titles):
+                print(f"Похожая новость пропущена: {title}")
+                continue
+
             image_url = fetch_image_url(entry, soup)
             video_url, is_youtube = fetch_video_info(entry, soup)
 
@@ -921,14 +961,15 @@ def main():
                 send_post(title, full_text, link, image_url, video_url, is_youtube)
                 links.add(link)
                 titles.add(normalize_title(title))
+                recent_titles.append({"title": title, "timestamp": time.time()})
                 new_posts += 1
-                save_last_post_time(time.time())
                 print(f"Опубликовано: {title}")
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
 
     if new_posts > 0:
         save_posted(links, titles)
+        save_recent_titles(recent_titles)
         print(f"Сохранено {new_posts} новых записей в {POSTED_FILE}")
     else:
         print("Новых новостей нет.")
