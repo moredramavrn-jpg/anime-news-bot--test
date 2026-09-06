@@ -241,12 +241,10 @@ def extract_full_text_from_page(soup):
             elem.decompose()
 
     # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
-    # Проверяем, что это страница Cybersport
     meta_og_url = soup.find('meta', property='og:url')
     is_cybersport = meta_og_url and 'cybersport.ru' in meta_og_url.get('content', '')
 
     if is_cybersport:
-        # Ищем основной контент на Cybersport
         main_content = soup.select_one('div.text-content.js-mediator-article')
         if not main_content:
             main_content = soup.select_one('div.text-content')
@@ -256,14 +254,12 @@ def extract_full_text_from_page(soup):
             main_content = soup.select_one('article div.text-content')
         
         if main_content:
-            # Извлекаем текст из всех параграфов
             text_parts = []
             for p in main_content.find_all(['p', 'div.paragraph']):
                 text = p.get_text(strip=True)
                 if text and len(text) > 10:
                     text_parts.append(text)
             
-            # Если есть видео-блоки, добавляем отметку
             video_blocks = main_content.find_all('div', class_='embed-block--youtube')
             if video_blocks:
                 text_parts.append("[ВИДЕО В СТАТЬЕ]")
@@ -275,11 +271,11 @@ def extract_full_text_from_page(soup):
             return clean_html(str(main_content))[:3000]
 
     # ---------- ДЛЯ ДРУГИХ САЙТОВ ----------
-    main_content = soup.select_one('div.editor-body')  # Goha.ru
+    main_content = soup.select_one('div.editor-body')
     if not main_content:
-        main_content = soup.select_one('div.news_text')  # КГ-Портал
+        main_content = soup.select_one('div.news_text')
     if not main_content:
-        main_content = soup.select_one('div.body-inner')  # Shikimori
+        main_content = soup.select_one('div.body-inner')
 
     if not main_content:
         selectors = [
@@ -302,7 +298,6 @@ def extract_full_text_from_page(soup):
 def fetch_full_text(entry):
     link = entry.get('link', '')
 
-    # Shikimori
     if 'shikimori' in link:
         soup = get_page_soup(link)
         if soup:
@@ -316,7 +311,6 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
-    # Для всех остальных - загружаем страницу
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -370,14 +364,13 @@ def fetch_image_url(entry, soup=None):
 
     if soup:
         image = extract_image_from_page(soup, link)
-        if image:
+        if image and 'logo' not in image.lower():
             return image
 
     image = extract_image_url_from_entry(entry)
-    if image:
+    if image and 'logo' not in image.lower():
         return image
 
-    print(f"Картинка не найдена для {link}")
     return None
 
 def extract_image_url_from_entry(entry):
@@ -452,14 +445,12 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
     # 1. YouTube блоки Cybersport
     youtube_blocks = soup.select('div.embed-block--youtube')
     for block in youtube_blocks:
         iframe = block.find('iframe')
         if iframe and iframe.get('src'):
             url = iframe['src']
-            # Пропускаем логотипы
             if 'logo' in url.lower():
                 continue
             if is_youtube_video(url):
@@ -469,16 +460,14 @@ def extract_video_url_from_page(soup):
     iframes = soup.find_all('iframe')
     for iframe in iframes:
         src = iframe.get('src', '')
-        # Пропускаем логотипы и рекламу
         if 'logo' in src.lower() or 'sponsor' in src.lower() or 'banner' in src.lower():
             continue
         if src and is_youtube_video(src):
             return src, True
     
-    # 3. Прямые ссылки в тегах a
+    # 3. Прямые ссылки
     for a in soup.find_all('a', href=True):
         href = a['href']
-        # Пропускаем логотипы
         if 'logo' in href.lower():
             continue
         if is_youtube_video(href):
@@ -491,7 +480,7 @@ def extract_video_url_from_page(soup):
         if is_youtube_video(url):
             return url, True
     
-    # 5. Обычные теги video (НО НЕ ЛОГОТИПЫ)
+    # 5. video теги
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -523,32 +512,10 @@ def fetch_video_info(entry, soup=None):
             soup = get_page_soup(link)
     if soup:
         video_url, is_youtube = extract_video_url_from_page(soup)
-        # Проверяем, что это не логотип
         if video_url and 'logo' in video_url.lower():
             return None, False
         return video_url, is_youtube
     return None, False
-
-def download_youtube_video(youtube_url):
-    try:
-        ydl_opts = {
-            'format': 'best[ext=mp4]',
-            'outtmpl': '-',
-            'quiet': True,
-            'noplaylist': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            video_url = info.get('url')
-            if video_url:
-                r = requests.get(video_url, stream=True, timeout=30)
-                r.raise_for_status()
-                video_bytes = io.BytesIO(r.content)
-                video_bytes.seek(0)
-                return video_bytes
-    except Exception as e:
-        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
-    return None
 
 def download_image(url, referer=None):
     try:
@@ -849,6 +816,7 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
+    # Определяем эмодзи
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
@@ -858,15 +826,17 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
+    # Переписываем новость через GigaChat
     title, body = rewrite_news(title, body)
 
-    # Ограничиваем длину тела новости
+    # Ограничиваем длину тела
     MAX_TEXT_LENGTH = 2500
     if body and len(body) > MAX_TEXT_LENGTH:
         body = truncate_by_words(body, MAX_TEXT_LENGTH)
         if not body.endswith('...'):
             body += '...'
 
+    # Формируем сообщение
     if video_url or image_url:
         full_message = build_caption_fit(title, body, emoji, 1024)
     else:
@@ -877,40 +847,37 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             if len(full_message) > 4096:
                 full_message = full_message[:4093] + '...'
 
-    # --- ОТПРАВКА ВИДЕО ---
-    if video_url:
-        # Проверяем, что это не логотип
-        if 'logo' in video_url.lower():
-            print(f"Пропускаем логотип: {video_url}")
-            video_url = None
-        elif is_youtube:
-            # Для YouTube - пробуем скачать, если не получится - отправляем ссылку
-            video_file = download_youtube_video(video_url)
-            if video_file:
-                try:
-                    bot.send_video(CHANNEL_ID, video_file, caption=full_message[:1024], parse_mode='HTML')
-                    return
-                except Exception as e:
-                    print(f"Не удалось отправить скачанное видео: {e}")
-            
-            # Если не удалось скачать - отправляем ссылку
-            short_url = to_short_youtube_url(video_url)
-            bot.send_message(
-                CHANNEL_ID,
-                full_message + f"\n\n🎬 Смотреть видео: {short_url}",
-                parse_mode='HTML',
-                disable_web_page_preview=False
-            )
-            return
-        else:
-            # Не YouTube видео - пробуем отправить
-            try:
+    # --- ЕСЛИ ЕСТЬ ВИДЕО (YouTube) ---
+    if video_url and is_youtube:
+        try:
+            # Пробуем отправить как видео (если ссылка на прямой файл)
+            if 'youtu.be' in video_url or 'youtube.com' in video_url:
+                # Это YouTube - отправляем ссылку
+                short_url = to_short_youtube_url(video_url)
+                bot.send_message(
+                    CHANNEL_ID,
+                    full_message + f"\n\n🎬 Смотреть видео: {short_url}",
+                    parse_mode='HTML',
+                    disable_web_page_preview=False
+                )
+                return
+            else:
+                # Пробуем отправить как видео
                 bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
                 return
-            except Exception as e:
-                print(f"Не удалось отправить видео: {e}")
+        except Exception as e:
+            print(f"Не удалось отправить видео: {e}")
+            # Если не получилось - отправляем ссылку
+            if video_url:
+                bot.send_message(
+                    CHANNEL_ID,
+                    full_message + f"\n\n🎬 Видео: {video_url}",
+                    parse_mode='HTML',
+                    disable_web_page_preview=False
+                )
+                return
 
-    # --- ОТПРАВКА ИЗОБРАЖЕНИЯ ---
+    # --- ЕСЛИ ЕСТЬ ИЗОБРАЖЕНИЕ ---
     if image_url:
         # Проверяем, что это не логотип
         if 'logo' in image_url.lower():
@@ -980,12 +947,8 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА СТРАНИЦЫ ТЕГА АНИМЕ НА CYBERSPORT ----------
+# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА CYBERSPORT ----------
 def fetch_cybersport_anime_news():
-    """
-    Парсит страницу https://www.cybersport.ru/tags/anime
-    и возвращает список словарей: {'title': ..., 'link': ..., 'image_url': ...}
-    """
     url = "https://www.cybersport.ru/tags/anime?sort=-publishedAt"
     soup = get_page_soup(url)
     if not soup:
@@ -1073,7 +1036,7 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 2. Cybersport /tags/anime -----
+    # ----- 2. Cybersport -----
     print("Обрабатываю новости Cybersport (тег аниме)...")
     cybersport_news = fetch_cybersport_anime_news()
     print(f"Найдено {len(cybersport_news)} новостей на Cybersport")
@@ -1109,7 +1072,7 @@ def main():
             image_url = fetch_image_url({'link': link}, soup)
             
         video_url, is_youtube = fetch_video_info({'link': link}, soup)
-        print(f"Видео найдено: {video_url[:50] if video_url else 'нет'}")
+        print(f"Видео: {video_url[:50] if video_url else 'нет'}")
 
         name_pairs = extract_russian_anime_names(soup)
         if name_pairs:
@@ -1126,7 +1089,7 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 3. Остальные RSS (Goha, KG-Portal) -----
+    # ----- 3. RSS (Goha, KG-Portal) -----
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
