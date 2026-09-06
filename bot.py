@@ -839,6 +839,53 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
+# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА SHIKIMORI ----------
+def fetch_shikimori_news_from_main_page():
+    soup = get_page_soup(SHIKIMORI_MAIN)
+    if not soup:
+        return []
+
+    news_items = []
+    seen_links = set()
+
+    latest = soup.select_one('div.news_wall.latest-news')
+    if latest:
+        for article in latest.select('article.b-news_wall-topic'):
+            link = article.select_one('a[href*="/forum/news/"]')
+            if link:
+                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
+                title = article.select_one('div.title')
+                title_text = title.get_text(strip=True) if title else "Без названия"
+                img_tag = article.select_one('img')
+                image_url = None
+                if img_tag:
+                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
+                    if src:
+                        image_url = make_absolute(src, SHIKIMORI_MAIN)
+                if href not in seen_links:
+                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
+                    seen_links.add(href)
+
+    other = soup.select_one('div.news_wall.other-news')
+    if other:
+        for article in other.select('article.b-news_wall-topic'):
+            link = article.select_one('a[href*="/forum/news/"]')
+            if link:
+                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
+                title = article.select_one('div.title')
+                title_text = title.get_text(strip=True) if title else "Без названия"
+                img_tag = article.select_one('img')
+                image_url = None
+                if img_tag:
+                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
+                    if src:
+                        image_url = make_absolute(src, SHIKIMORI_MAIN)
+                if href not in seen_links:
+                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
+                    seen_links.add(href)
+
+    return news_items
+
 # ---------- НОВАЯ ФУНКЦИЯ ДЛЯ ПАРСИНГА СТРАНИЦЫ ТЕГА АНИМЕ НА CYBERSPORT ----------
 def fetch_cybersport_anime_news():
     """
@@ -888,7 +935,7 @@ def main():
     recent_titles = load_recent_titles()
     new_posts = 0
 
-    # ----- 1. Shikimori (без изменений) -----
+    # ----- 1. Shikimori -----
     print("Обрабатываю новости Shikimori...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
@@ -986,8 +1033,6 @@ def main():
 
             link = entry.get('link', '')
             title = entry.get('title', 'Без названия')
-
-            # Убрана проверка на cybersport, так как его больше нет в RSS_URLS
 
             if is_duplicate(link, title, links, titles):
                 print(f"Дубликат пропущен: {title}")
