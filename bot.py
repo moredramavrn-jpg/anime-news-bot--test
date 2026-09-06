@@ -260,7 +260,7 @@ def extract_full_text_from_page(soup):
             text_parts = []
             for p in main_content.find_all(['p', 'div.paragraph']):
                 text = p.get_text(strip=True)
-                if text and len(text) > 10:  # Игнорируем слишком короткие
+                if text and len(text) > 10:
                     text_parts.append(text)
             
             # Если есть видео-блоки, добавляем отметку
@@ -272,7 +272,6 @@ def extract_full_text_from_page(soup):
             if full_text:
                 return full_text[:3000]
             
-            # Если не нашли через p, пробуем просто получить весь текст
             return clean_html(str(main_content))[:3000]
 
     # ---------- ДЛЯ ДРУГИХ САЙТОВ ----------
@@ -317,21 +316,13 @@ def fetch_full_text(entry):
             return clean_html(summary)
         return ""
 
-    # Cybersport - используем обновлённую функцию
+    # Для всех остальных - загружаем страницу
     if link:
         soup = get_page_soup(link)
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text and len(full_text) > 50:
                 return full_text[:3000]
-
-    # Goha, KG-Portal и другие
-    if link:
-        soup = get_page_soup(link)
-        if soup:
-            full_text = extract_full_text_from_page(soup)
-            if full_text:
-                return full_text[:2000]
     
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
@@ -429,6 +420,8 @@ def extract_image_url_from_entry(entry):
 
 # ---------- Видео ----------
 def is_youtube_video(url):
+    if not url:
+        return False
     return (
         'youtube.com/watch' in url or
         'youtu.be/' in url or
@@ -460,62 +453,66 @@ def extract_video_url_from_page(soup):
         return None, False
 
     # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
-    # Проверяем YouTube вставки
+    # 1. YouTube блоки Cybersport
     youtube_blocks = soup.select('div.embed-block--youtube')
     for block in youtube_blocks:
-        # Ищем iframe внутри
         iframe = block.find('iframe')
         if iframe and iframe.get('src'):
             url = iframe['src']
+            # Пропускаем логотипы
+            if 'logo' in url.lower():
+                continue
             if is_youtube_video(url):
                 return url, True
     
-    # Ищем любые iframe с YouTube
-    iframe = soup.select_one('iframe[src*="youtube.com/embed"], iframe[src*="youtu.be/"]')
-    if iframe and iframe.get('src'):
-        return iframe['src'], True
-
-    # ---------- ОСТАЛЬНОЙ КОД ----------
+    # 2. Любые iframe
+    iframes = soup.find_all('iframe')
+    for iframe in iframes:
+        src = iframe.get('src', '')
+        # Пропускаем логотипы и рекламу
+        if 'logo' in src.lower() or 'sponsor' in src.lower() or 'banner' in src.lower():
+            continue
+        if src and is_youtube_video(src):
+            return src, True
+    
+    # 3. Прямые ссылки в тегах a
+    for a in soup.find_all('a', href=True):
+        href = a['href']
+        # Пропускаем логотипы
+        if 'logo' in href.lower():
+            continue
+        if is_youtube_video(href):
+            return href, True
+    
+    # 4. Meta og:video
+    og_video = soup.find('meta', property='og:video')
+    if og_video and og_video.get('content'):
+        url = og_video['content']
+        if is_youtube_video(url):
+            return url, True
+    
+    # 5. Обычные теги video (НО НЕ ЛОГОТИПЫ)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
+        if src and 'logo' in src.lower():
+            return None, False
         if src and re.search(r'\.(mp4|webm)(\?.*)?$', src, re.IGNORECASE):
             return src, False
         source_tag = video_tag.select_one('source')
-        if source_tag and source_tag.get('src') and re.search(r'\.(mp4|webm)(\?.*)?$', source_tag['src'], re.IGNORECASE):
-            return source_tag['src'], False
-
-    og_video = soup.select_one('meta[property="og:video"]')
-    if og_video and og_video.get('content'):
-        url = og_video['content']
-        if re.search(r'\.(mp4|webm)(\?.*)?$', url, re.IGNORECASE):
-            return url, False
-
+        if source_tag and source_tag.get('src'):
+            src = source_tag['src']
+            if 'logo' in src.lower():
+                return None, False
+            if re.search(r'\.(mp4|webm)(\?.*)?$', src, re.IGNORECASE):
+                return src, False
+    
+    # 6. editor-body-youtube (для Goha)
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
         if is_youtube_video(url):
             return url, True
-
-    if og_video and og_video.get('content'):
-        url = og_video['content']
-        if is_youtube_video(url):
-            return url, True
-
-    for a in soup.select('div.b-video.youtube a.video-link, a.video-link[data-href*="youtube"], a.video-link[href*="youtube"]'):
-        data_href = a.get('data-href') or a.get('href')
-        if data_href:
-            url = html.unescape(data_href)
-            if is_youtube_video(url):
-                return url, True
-
-    for a in soup.select('a.youtube'):
-        href = a.get('href', '')
-        match = re.search(r'url=([^&]+)', href)
-        if match:
-            url = html.unescape(match.group(1))
-            if is_youtube_video(url):
-                return url, True
 
     return None, False
 
@@ -525,7 +522,11 @@ def fetch_video_info(entry, soup=None):
         if link:
             soup = get_page_soup(link)
     if soup:
-        return extract_video_url_from_page(soup)
+        video_url, is_youtube = extract_video_url_from_page(soup)
+        # Проверяем, что это не логотип
+        if video_url and 'logo' in video_url.lower():
+            return None, False
+        return video_url, is_youtube
     return None, False
 
 def download_youtube_video(youtube_url):
@@ -859,7 +860,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     title, body = rewrite_news(title, body)
 
-    # Ограничиваем длину тела новости (для Telegram)
+    # Ограничиваем длину тела новости
     MAX_TEXT_LENGTH = 2500
     if body and len(body) > MAX_TEXT_LENGTH:
         body = truncate_by_words(body, MAX_TEXT_LENGTH)
@@ -870,50 +871,62 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         full_message = build_caption_fit(title, body, emoji, 1024)
     else:
         full_message = build_post_html(title, body, emoji)
-        # Для текстовых сообщений ограничение 4096
         if len(full_message) > 4096:
             body = body[:2000] + '...'
             full_message = build_post_html(title, body, emoji)
             if len(full_message) > 4096:
                 full_message = full_message[:4093] + '...'
 
-    if video_url and not is_youtube:
-        try:
-            bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
+    # --- ОТПРАВКА ВИДЕО ---
+    if video_url:
+        # Проверяем, что это не логотип
+        if 'logo' in video_url.lower():
+            print(f"Пропускаем логотип: {video_url}")
+            video_url = None
+        elif is_youtube:
+            # Для YouTube - пробуем скачать, если не получится - отправляем ссылку
+            video_file = download_youtube_video(video_url)
+            if video_file:
+                try:
+                    bot.send_video(CHANNEL_ID, video_file, caption=full_message[:1024], parse_mode='HTML')
+                    return
+                except Exception as e:
+                    print(f"Не удалось отправить скачанное видео: {e}")
+            
+            # Если не удалось скачать - отправляем ссылку
+            short_url = to_short_youtube_url(video_url)
+            bot.send_message(
+                CHANNEL_ID,
+                full_message + f"\n\n🎬 Смотреть видео: {short_url}",
+                parse_mode='HTML',
+                disable_web_page_preview=False
+            )
             return
-        except Exception as e:
-            print(f"Не удалось отправить видео: {e}")
-
-    if video_url and is_youtube:
-        video_file = download_youtube_video(video_url)
-        if video_file:
+        else:
+            # Не YouTube видео - пробуем отправить
             try:
-                bot.send_video(CHANNEL_ID, video_file, caption=full_message[:1024], parse_mode='HTML')
+                bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
                 return
             except Exception as e:
-                print(f"Не удалось отправить скачанное видео: {e}")
+                print(f"Не удалось отправить видео: {e}")
 
-        short_url = to_short_youtube_url(video_url)
-        bot.send_message(
-            CHANNEL_ID,
-            full_message + f"\n\nСмотреть: {short_url}",
-            parse_mode='HTML',
-            disable_web_page_preview=False
-        )
-        return
-
+    # --- ОТПРАВКА ИЗОБРАЖЕНИЯ ---
     if image_url:
-        image_file = download_image(image_url, referer=link)
-        if image_file:
-            try:
-                bot.send_photo(CHANNEL_ID, image_file, caption=full_message[:1024], parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить фото: {e}")
+        # Проверяем, что это не логотип
+        if 'logo' in image_url.lower():
+            print(f"Пропускаем логотип: {image_url}")
+            image_url = None
+        else:
+            image_file = download_image(image_url, referer=link)
+            if image_file:
+                try:
+                    bot.send_photo(CHANNEL_ID, image_file, caption=full_message[:1024], parse_mode='HTML')
+                    return
+                except Exception as e:
+                    print(f"Не удалось отправить фото: {e}")
 
-    # Проверяем длину перед отправкой
+    # --- ОТПРАВКА ТЕКСТОМ ---
     if len(full_message) > 4096:
-        # Разбиваем на несколько сообщений
         for i in range(0, len(full_message), 4096):
             part = full_message[i:i+4096]
             bot.send_message(CHANNEL_ID, part, parse_mode='HTML', disable_web_page_preview=True)
@@ -1069,19 +1082,16 @@ def main():
         link = news['link']
         title = news['title']
         
-        # Проверяем дубликат
         if is_duplicate(link, title, links, titles):
             print(f"Дубликат пропущен: {title}")
             continue
 
-        # Загружаем страницу и получаем полный текст
         soup = get_page_soup(link)
         if not soup:
             print(f"Не удалось загрузить страницу: {link}")
             continue
             
         full_text = fetch_full_text({'link': link, 'title': title})
-        print(f"Длина текста: {len(full_text) if full_text else 0}")
 
         if full_text:
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
