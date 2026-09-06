@@ -825,46 +825,85 @@ def rewrite_news(title, body):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
+    # Сначала строим полное сообщение
     full_html = build_post_html(title, body, emoji)
+    
+    # Проверяем длину без HTML-тегов
     plain_text = strip_html_tags(full_html)
-
+    
+    # Если помещается - возвращаем как есть
     if len(plain_text) <= max_len:
         return full_html
 
+    # Если не помещается - обрезаем умнее
+    # Разбиваем на части
+    title_esc = escape_html(title)
+    separator = "┄┄┄ ✦ ┄┄┄"
+    
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
     tags_str = " ".join(hashtags)
-
-    title_plain = f"{emoji} {title}"
-    separator_plain = "┄┄┄ ✦ ┄┄┄"
-    footer_plain = f"🏷️ {tags_str}"
-
-    base_len = len(title_plain) + len(separator_plain) + len(footer_plain) + 6
-    available = max_len - base_len
-
+    
+    # Базовая часть (заголовок + разделитель + хэштеги)
+    base_html = f"{emoji} <b>{title_esc}</b>\n{separator}\n"
+    footer = f"\n\n🏷️ {tags_str}"
+    
+    base_len = len(strip_html_tags(base_html)) + len(strip_html_tags(footer))
+    available = max_len - base_len - 3  # 3 символа на "..."
+    
     if available < 50:
+        # Если совсем мало места - обрезаем сильно
         return truncate_by_words(plain_text, max_len)
-
+    
+    # Форматируем тело и обрезаем по предложениям
     body_formatted = format_news_body(body)
-    body_paragraphs = body_formatted.split('\n\n')
-    chosen = []
+    
+    # Убираем HTML-теги для подсчёта
+    body_plain = strip_html_tags(body_formatted)
+    
+    # Если тело помещается - возвращаем полное сообщение
+    if len(body_plain) <= available:
+        return f"{base_html}{body_formatted}{footer}"
+    
+    # Иначе обрезаем по предложениям
+    sentences = re.split(r'(?<=[.!?])\s+', body_plain)
+    result = []
     current_len = 0
-    for para in body_paragraphs:
-        para_plain = strip_html_tags(para)
-        if current_len + len(para_plain) + 2 <= available:
-            chosen.append(para)
-            current_len += len(para_plain) + 2
+    
+    for sent in sentences:
+        sent_len = len(sent)
+        if current_len + sent_len + 2 <= available:
+            result.append(sent)
+            current_len += sent_len + 2
         else:
+            # Если предложение слишком длинное - обрезаем по словам
             remaining = available - current_len
             if remaining > 20:
-                truncated_para = truncate_by_words(para_plain, remaining)
-                chosen.append(truncated_para)
+                words = sent.split()
+                truncated = []
+                for w in words:
+                    if current_len + len(w) + 1 <= available:
+                        truncated.append(w)
+                        current_len += len(w) + 1
+                    else:
+                        break
+                if truncated:
+                    result.append(' '.join(truncated) + '...')
             break
-
-    truncated_body = '\n\n'.join(chosen)
-    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
+    
+    truncated_body = ' '.join(result)
+    
+    # Если тело слишком короткое - добавляем троеточие
+    if len(truncated_body) < len(body_plain) and not truncated_body.endswith('...'):
+        truncated_body += '...'
+    
+    # Если тело вообще пустое - используем заголовок
+    if not truncated_body:
+        truncated_body = title
+    
+    return f"{base_html}{truncated_body}{footer}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
     # Определяем эмодзи
@@ -887,17 +926,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         if not body.endswith('...'):
             body += '...'
 
-    # Формируем сообщение
-    if video_url or image_url:
-        full_message = build_caption_fit(title, body, emoji, 1024)
-    else:
-        full_message = build_post_html(title, body, emoji)
-        if len(full_message) > 4096:
-            body = body[:2000] + '...'
-            full_message = build_post_html(title, body, emoji)
-            if len(full_message) > 4096:
-                full_message = full_message[:4093] + '...'
-
     # --- ЕСЛИ ЕСТЬ ВИДЕО ---
     if video_url:
         # Проверяем, что это не логотип
@@ -911,6 +939,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             if is_yt:
                 # Это YouTube - отправляем ссылку
                 short_url = to_short_youtube_url(video_url)
+                full_message = build_post_html(title, body, emoji)
                 try:
                     bot.send_message(
                         CHANNEL_ID,
@@ -923,12 +952,14 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
                     print(f"Не удалось отправить ссылку на видео: {e}")
             else:
                 # Это не YouTube - пробуем отправить как видео
+                full_message = build_caption_fit(title, body, emoji, 1024)
                 try:
-                    bot.send_video(CHANNEL_ID, video_url, caption=full_message[:1024], parse_mode='HTML')
+                    bot.send_video(CHANNEL_ID, video_url, caption=full_message, parse_mode='HTML')
                     return
                 except Exception as e:
                     print(f"Не удалось отправить видео: {e}")
                     # Если не получилось - отправляем ссылку
+                    full_message = build_post_html(title, body, emoji)
                     bot.send_message(
                         CHANNEL_ID,
                         full_message + f"\n\n🎬 Видео: {video_url}",
@@ -944,17 +975,47 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             print(f"Пропускаем логотип/SVG: {image_url}")
             image_url = None
         else:
-            image_file = download_image(image_url, referer=link)
-            if image_file:
+            # Формируем подпись для картинки
+            full_message = build_caption_fit(title, body, emoji, 1024)
+            
+            # Проверяем длину подписи
+            plain_text = strip_html_tags(full_message)
+            
+            if len(plain_text) <= 1024:
+                # Если помещается - отправляем с картинкой
+                image_file = download_image(image_url, referer=link)
+                if image_file:
+                    try:
+                        bot.send_photo(CHANNEL_ID, image_file, caption=full_message, parse_mode='HTML')
+                        return
+                    except Exception as e:
+                        print(f"Не удалось отправить фото: {e}")
+            else:
+                # Если не помещается - сначала картинка с заголовком, потом текст
                 try:
-                    bot.send_photo(CHANNEL_ID, image_file, caption=full_message[:1024], parse_mode='HTML')
+                    # Отправляем картинку с коротким заголовком
+                    short_caption = f"{emoji} <b>{escape_html(title)}</b>"
+                    image_file = download_image(image_url, referer=link)
+                    if image_file:
+                        bot.send_photo(CHANNEL_ID, image_file, caption=short_caption, parse_mode='HTML')
+                    
+                    # Отправляем полный текст отдельным сообщением
+                    full_text_message = build_post_html(title, body, '📄')
+                    if len(full_text_message) > 4096:
+                        for i in range(0, len(full_text_message), 4096):
+                            part = full_text_message[i:i+4096]
+                            bot.send_message(CHANNEL_ID, part, parse_mode='HTML', disable_web_page_preview=True)
+                    else:
+                        bot.send_message(CHANNEL_ID, full_text_message, parse_mode='HTML', disable_web_page_preview=True)
                     return
                 except Exception as e:
-                    print(f"Не удалось отправить фото: {e}")
-                    # Если фото не отправилось - пробуем без фото
+                    print(f"Ошибка при отправке с картинкой: {e}")
+                    # Если ошибка - отправляем просто текстом
                     pass
 
-    # --- ОТПРАВКА ТЕКСТОМ ---
+    # --- ОТПРАВКА ТЕКСТОМ (без картинки или если картинка не отправилась) ---
+    full_message = build_post_html(title, body, emoji)
+    
     if len(full_message) > 4096:
         for i in range(0, len(full_message), 4096):
             part = full_message[i:i+4096]
