@@ -245,8 +245,7 @@ def extract_full_text_from_page(soup):
         main_content = soup.select_one('div.body-inner')  # Shikimori
 
     if not main_content:
-        # Cybersport
-        main_content = soup.select_one('div.article-content') or soup.select_one('div.article__text')
+        main_content = soup.select_one('div.article-content') or soup.select_one('div.article__text')  # Cybersport
 
     if not main_content:
         selectors = [
@@ -884,7 +883,8 @@ def fetch_shikimori_news_from_main_page():
                 title = article.select_one('div.title')
                 title_text = title.get_text(strip=True) if title else "Без названия"
                 img_tag = article.select_one('img')
-                image_url = None                if img_tag:
+                image_url = None
+                if img_tag:
                     src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
                     if src:
                         image_url = make_absolute(src, SHIKIMORI_MAIN)
@@ -902,7 +902,6 @@ def fetch_cybersport_news():
     news_items = []
     seen_links = set()
 
-    # Селекторы могут отличаться, но обычно новости в <article> или <div class="news-item">
     for article in soup.select("article, div.news-item, div.article"):
         link_tag = article.select_one("a[href*='/news/']") or article.select_one("a[href*='/articles/']")
         if not link_tag:
@@ -1048,4 +1047,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
