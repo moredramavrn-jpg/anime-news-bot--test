@@ -22,10 +22,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
+# Убираем Cybersport RSS, оставляем только Goha и KG-Portal
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
-    "https://kg-portal.ru/rss/news_anime.rss",
-    "https://www.cybersport.ru/rss/materials"
+    "https://kg-portal.ru/rss/news_anime.rss"
 ]
 
 ANIME_KEYWORDS = ["аниме", "anime", "манга", "manga", "ранобэ", "ranobe"]
@@ -839,57 +839,56 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
 
-def fetch_shikimori_news_from_main_page():
-    soup = get_page_soup(SHIKIMORI_MAIN)
+# ---------- НОВАЯ ФУНКЦИЯ ДЛЯ ПАРСИНГА СТРАНИЦЫ ТЕГА АНИМЕ НА CYBERSPORT ----------
+def fetch_cybersport_anime_news():
+    """
+    Парсит страницу https://www.cybersport.ru/tags/anime
+    и возвращает список словарей: {'title': ..., 'link': ..., 'image_url': ...}
+    """
+    url = "https://www.cybersport.ru/tags/anime?sort=-publishedAt"
+    soup = get_page_soup(url)
     if not soup:
+        print("Не удалось загрузить страницу Cybersport Anime")
         return []
 
     news_items = []
-    seen_links = set()
+    articles = soup.select('article')
+    for article in articles:
+        link_tag = article.find('a', class_='link_CocWY')
+        if not link_tag:
+            continue
+        link = link_tag.get('href')
+        if link.startswith('/'):
+            link = urljoin('https://www.cybersport.ru', link)
 
-    latest = soup.select_one('div.news_wall.latest-news')
-    if latest:
-        for article in latest.select('article.b-news_wall-topic'):
-            link = article.select_one('a[href*="/forum/news/"]')
-            if link:
-                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
-                title = article.select_one('div.title')
-                title_text = title.get_text(strip=True) if title else "Без названия"
-                img_tag = article.select_one('img')
-                image_url = None
-                if img_tag:
-                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
-                    if src:
-                        image_url = make_absolute(src, SHIKIMORI_MAIN)
-                if href not in seen_links:
-                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
-                    seen_links.add(href)
+        title_tag = article.find('h3', class_='title_nSS03')
+        if not title_tag:
+            continue
+        title = title_tag.get_text(strip=True)
 
-    other = soup.select_one('div.news_wall.other-news')
-    if other:
-        for article in other.select('article.b-news_wall-topic'):
-            link = article.select_one('a[href*="/forum/news/"]')
-            if link:
-                href = urljoin(SHIKIMORI_MAIN, link.get('href', ''))
-                title = article.select_one('div.title')
-                title_text = title.get_text(strip=True) if title else "Без названия"
-                img_tag = article.select_one('img')
-                image_url = None
-                if img_tag:
-                    src = img_tag.get('src') or img_tag.get('data-src') or img_tag.get('data-original')
-                    if src:
-                        image_url = make_absolute(src, SHIKIMORI_MAIN)
-                if href not in seen_links:
-                    news_items.append({'title': title_text, 'link': href, 'image_url': image_url})
-                    seen_links.add(href)
+        img_tag = article.find('img')
+        image_url = None
+        if img_tag:
+            src = img_tag.get('src') or img_tag.get('data-src')
+            if src:
+                image_url = urljoin('https://www.cybersport.ru', src)
+
+        news_items.append({
+            'title': title,
+            'link': link,
+            'image_url': image_url,
+            'source': 'cybersport_tag'
+        })
 
     return news_items
 
+# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
 def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
     new_posts = 0
 
+    # ----- 1. Shikimori (без изменений) -----
     print("Обрабатываю новости Shikimori...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
@@ -931,6 +930,47 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
+    # ----- 2. НОВЫЙ ИСТОЧНИК: Cybersport /tags/anime -----
+    print("Обрабатываю новости Cybersport (тег аниме)...")
+    cybersport_news = fetch_cybersport_anime_news()
+    for news in cybersport_news:
+        link = news['link']
+        title = news['title']
+        if is_duplicate(link, title, links, titles):
+            print(f"Дубликат пропущен (Cybersport): {title}")
+            continue
+
+        # Получаем полный текст статьи
+        entry = {'link': link, 'title': title}
+        soup = get_page_soup(link)
+        full_text = fetch_full_text(entry)
+
+        if is_similar_news(title, full_text, recent_titles):
+            print(f"Похожая новость пропущена (Cybersport): {title}")
+            continue
+
+        image_url = news.get('image_url')
+        if not image_url:
+            image_url = fetch_image_url(entry, soup)
+
+        video_url, is_youtube = fetch_video_info(entry, soup)
+
+        name_pairs = extract_russian_anime_names(soup)
+        if name_pairs:
+            title = replace_anime_names(title, name_pairs)
+            full_text = replace_anime_names(full_text, name_pairs)
+
+        try:
+            send_post(title, full_text, link, image_url, video_url, is_youtube)
+            links.add(link)
+            titles.add(normalize_title(title))
+            recent_titles.append({"title": title, "timestamp": time.time()})
+            new_posts += 1
+            print(f"Опубликовано (Cybersport): {title}")
+        except Exception as e:
+            print(f"Ошибка отправки для {link}: {e}")
+
+    # ----- 3. Остальные RSS (Goha, KG-Portal) -----
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
@@ -947,10 +987,7 @@ def main():
             link = entry.get('link', '')
             title = entry.get('title', 'Без названия')
 
-            # Фильтр для Cybersport: только аниме-новости
-            if 'cybersport.ru' in link:
-                if not any(kw in (title + " " + link).lower() for kw in ANIME_KEYWORDS):
-                    continue
+            # Убрана проверка на cybersport, так как его больше нет в RSS_URLS
 
             if is_duplicate(link, title, links, titles):
                 print(f"Дубликат пропущен: {title}")
