@@ -10,7 +10,6 @@ import urllib3
 import feedparser
 import telebot
 import requests
-import yt_dlp
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, urlparse, unquote
 from bs4 import BeautifulSoup
@@ -155,7 +154,6 @@ def giga_request(prompt, max_tokens=500):
         return ""
 
 def is_similar_news(title, body, recent_titles):
-    """Проверяет через GigaChat, является ли новость дубликатом по смыслу."""
     if not recent_titles:
         return False
 
@@ -278,7 +276,7 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    return collapse_repeated_phrases(full_text[:3000])
+                    return collapse_repeated_phrases(full_text)
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
@@ -289,7 +287,7 @@ def fetch_full_text(entry):
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
-                return collapse_repeated_phrases(full_text[:3000])
+                return collapse_repeated_phrases(full_text)
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -470,27 +468,6 @@ def fetch_video_info(entry, soup=None):
         return extract_video_url_from_page(soup)
     return None, False
 
-def download_youtube_video(youtube_url):
-    try:
-        ydl_opts = {
-            'format': 'best[ext=mp4]',
-            'outtmpl': '-',
-            'quiet': True,
-            'noplaylist': True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            video_url = info.get('url')
-            if video_url:
-                r = requests.get(video_url, stream=True, timeout=30)
-                r.raise_for_status()
-                video_bytes = io.BytesIO(r.content)
-                video_bytes.seek(0)
-                return video_bytes
-    except Exception as e:
-        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
-    return None
-
 def download_image(url, referer=None):
     try:
         headers = {
@@ -520,14 +497,13 @@ def simple_truncate_by_sentences(text, max_len):
     return result
 
 def truncate_by_words(text, max_len):
-    """Обрезает текст по словам так, чтобы итог не превышал max_len в UTF-16 code units."""
     if telegram_len(text) <= max_len:
         return text
     words = text.split()
     result = []
     current_len = 0
     for w in words:
-        w_len = telegram_len(w) + 1  # +1 на пробел
+        w_len = telegram_len(w) + 1
         if current_len + w_len > max_len:
             break
         result.append(w)
@@ -535,8 +511,6 @@ def truncate_by_words(text, max_len):
     return ' '.join(result)
 
 def truncate_to_full_sentences(text, max_len):
-    """Обрезает текст по границе предложений, чтобы не обрывать фразу на полуслове.
-    Возвращает пустую строку, если даже одно предложение не помещается."""
     if telegram_len(text) <= max_len:
         return text
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -556,15 +530,11 @@ def strip_html_tags(text):
     return re.sub(r'<[^>]+>', '', text)
 
 def normalize_whitespace(text):
-    """Схлопывает любые пробельные символы (включая переносы строк) в один пробел."""
     if not text:
         return text
     return re.sub(r'\s+', ' ', text).strip()
 
 def collapse_repeated_phrases(text, max_words=5):
-    """Убирает подряд идущие повторы одной и той же фразы длиной 1-5 слов.
-    Типичный артефакт вёрстки сайтов, где имя/название дублируется соседними
-    элементами (например, оригинал + транскрипция, спрятанные друг под другом)."""
     if not text:
         return text
     words = text.split()
@@ -719,10 +689,6 @@ def remove_duplicate_start(title, body):
     return body_clean
 
 def rewrite_news(title, body, target_len=None):
-    """Переписывает новость через GigaChat.
-    Если задан target_len — просим модель уложиться примерно в это количество символов
-    (в UTF-16 code units), но обязательно закончить мысль, а не просто ужать текст
-    произвольным образом. Так финальный пост не придётся дорезать механически."""
     if not GIGACHAT_AUTHORIZATION_KEY:
         return title, body
 
@@ -734,7 +700,6 @@ def rewrite_news(title, body, target_len=None):
     source_len = telegram_len(body_part)
 
     if target_len is None:
-        # Старое поведение — просто пересказать без искусственного сжатия
         target_len = source_len
 
     needs_compression = source_len > target_len * 1.1
@@ -832,8 +797,6 @@ def rewrite_news(title, body, target_len=None):
             new_len = telegram_len(new_body)
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
             print(f"[DEBUG] Длина после рерайта: {new_len}, цель: {target_len}, исходник: {source_len}")
-            # Если ушли слишком далеко за целевую длину (в обе стороны) — что-то пошло не так,
-            # безопаснее вернуть оригинал и дать сработать обрезке по предложениям как safety net
             if new_len > target_len * 1.25 or new_len < target_len * 0.5:
                 print(f"[WARNING] Длина рерайта сильно отклоняется от цели, используем оригинальный текст")
                 return title, body
@@ -845,11 +808,6 @@ def rewrite_news(title, body, target_len=None):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
-    """Формирует подпись к фото/видео, максимально используя лимит max_len
-    (в UTF-16 code units, как считает сам Telegram).
-    Это safety net: в норме текст уже приходит нужной длины из rewrite_news
-    (см. target_len), поэтому обрезка здесь почти не должна срабатывать.
-    Если всё же приходится обрезать — режем по границе целого предложения."""
     title = normalize_whitespace(title)
     full_html = build_post_html(title, body, emoji)
     plain_text = strip_html_tags(full_html)
@@ -903,13 +861,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Заранее прикидываем, сколько символов реально доступно под текст новости,
-    # чтобы попросить GigaChat уложиться в этот бюджет и не резать пост потом.
-    # YouTube-видео больше не прикрепляем как файл — оно всегда идёт текстом со ссылкой,
-    # поэтому под него действует полный лимит текстового сообщения (4096), а не подписи.
     has_media = bool(image_url) or bool(video_url and not is_youtube)
     max_len_for_post = 1024 if has_media else 4096
-    # Резерв под заголовок, разделитель, хэштеги и переносы строк (эмпирически)
     shell_reserve = telegram_len(title) + 90
     target_len = max(150, max_len_for_post - shell_reserve)
 
@@ -917,14 +870,12 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     title, body = rewrite_news(title, body, target_len=target_len)
     print(f"[DEBUG] Текст ПОСЛЕ рерайта: {telegram_len(body)} символов")
 
-    # Полный текст без обрезки под 1024 — пригодится для текстовых сообщений (лимит 4096)
     full_message_long = build_post_html(title, body, emoji)
-    # Текст под лимит подписи к фото/видео (лимит 1024) — считаем лениво, только когда нужен
     caption_message = None
     def get_caption():
         nonlocal caption_message
         if caption_message is None:
-            caption_message = build_caption_fit(title, body, emoji, link=link, max_len=1024)
+            caption_message = build_caption_fit(title, body, emoji, max_len=1024)
             print(f"[DEBUG] Итоговая подпись (caption): {telegram_len(caption_message)} символов")
         return caption_message
 
@@ -934,14 +885,11 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
-            # Fallback: видео не отправилось — шлём полный текст сообщением (лимит 4096)
             bot.send_message(CHANNEL_ID, full_message_long[:4096], parse_mode='HTML',
                               disable_web_page_preview=True)
             return
 
     if video_url and is_youtube:
-        # Видео не скачиваем — сразу отправляем текстом со ссылкой на YouTube.
-        # Telegram сам подтянет превью с плеером по ссылке.
         short_url = to_short_youtube_url(video_url)
         message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
         bot.send_message(
@@ -961,9 +909,9 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    # Фото нет или не удалось отправить — используем полный текст (лимит 4096)
     bot.send_message(CHANNEL_ID, full_message_long[:4096], parse_mode='HTML', disable_web_page_preview=True)
 
+# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА SHIKIMORI ----------
 def fetch_shikimori_news_from_main_page():
     soup = get_page_soup(SHIKIMORI_MAIN)
     if not soup:
@@ -1010,6 +958,7 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
+# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
 def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
@@ -1027,7 +976,6 @@ def main():
         soup = get_page_soup(link)
         full_text = fetch_full_text({'link': link, 'title': title})
 
-        # Убираем дублирование: заголовок = первое предложение, остальное = тело
         if full_text:
             full_text = collapse_repeated_phrases(full_text)
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
