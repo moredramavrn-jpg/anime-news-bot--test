@@ -316,10 +316,57 @@ def collapse_repeated_phrases(text, max_words=8):
     
     return ' '.join(result)
 
+def clean_shikimori_links(text):
+    """
+    Очищает текст от дублей, создаваемых ссылками на Shikimori.
+    Например: «NarutoНаруто» -> «Наруто»
+    Hayato DateХаято Датэ -> Хаято Датэ
+    """
+    if not text:
+        return text
+    
+    # Убираем дубли в кавычках: «NarutoНаруто» -> «Наруто»
+    # Ищем паттерн: «[англ. название][рус. название]» и оставляем только русское
+    pattern = r'«([A-Za-z0-9\s]+)([А-Яа-я\s]+)»'
+    text = re.sub(pattern, r'«\2»', text)
+    
+    # Тоже самое без кавычек: NarutoНаруто -> Наруто
+    # Проверяем, что вторая часть — это русское название
+    def replace_en_ru(match):
+        en_part = match.group(1).strip()
+        ru_part = match.group(2).strip()
+        # Если русская часть больше 2 символов и это похоже на имя/название
+        if len(ru_part) > 2 and re.search(r'[А-Я]', ru_part):
+            return ru_part
+        return match.group(0)
+    
+    # Сначала ищем английское слово за которым сразу идёт русское
+    # Например: "Hayato DateХаято Датэ" -> "Хаято Датэ"
+    pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)'
+    text = re.sub(pattern, replace_en_ru, text)
+    
+    # Убираем дубли имён: "Хаято Датэ Хаято Датэ" -> "Хаято Датэ"
+    pattern = r'([А-Я][а-я]+\s+[А-Я][а-я]+)\s+\1'
+    text = re.sub(pattern, r'\1', text)
+    
+    # Убираем дубли названий: "Наруто Наруто" -> "Наруто"
+    pattern = r'([А-Я][а-я]+)\s+\1(?=\s|$|[,.:;!?])'
+    text = re.sub(pattern, r'\1', text)
+    
+    return text
+
 def clean_duplicate_title(title):
-    """Убирает дублирование в заголовке типа 'Режиссёр Наруто Наруто'"""
+    """Убирает дублирование в заголовке"""
     if not title:
         return title
+    
+    # Убираем дубли: «NarutoНаруто» -> «Наруто»
+    title = re.sub(r'«([A-Za-z0-9\s]+)([А-Яа-я\s]+)»', r'«\2»', title)
+    
+    # Убираем дубли имён в заголовке
+    title = re.sub(r'([А-Я][а-я]+\s+[А-Я][а-я]+)\s+\1', r'\1', title)
+    title = re.sub(r'([А-Я][а-я]+)\s+\1(?=\s|$|[,.:;!?])', r'\1', title)
+    
     # Убираем повтор одинаковых слов подряд
     words = title.split()
     result = []
@@ -327,6 +374,7 @@ def clean_duplicate_title(title):
         if result and w.lower() == result[-1].lower():
             continue
         result.append(w)
+    
     return ' '.join(result)
 
 def fetch_full_text(entry):
@@ -339,9 +387,8 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    # Чистим от дублей
                     full_text = collapse_repeated_phrases(full_text)
-                    # Убираем повторы имён в начале
+                    full_text = clean_shikimori_links(full_text)
                     full_text = re.sub(r'^([^.!?]+)\s+\1\s*', r'\1 ', full_text, flags=re.IGNORECASE)
                     return full_text
         summary = entry.get('summary', '') or entry.get('description', '')
@@ -354,7 +401,9 @@ def fetch_full_text(entry):
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
-                return collapse_repeated_phrases(full_text)
+                full_text = collapse_repeated_phrases(full_text)
+                full_text = clean_shikimori_links(full_text)
+                return full_text
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -899,6 +948,7 @@ def build_caption_fit(title, body, emoji, max_len=1024):
 def send_post(title, body, link, image_url, video_url, is_youtube):
     # Чистим заголовок от дублей
     title = clean_duplicate_title(title)
+    body = clean_shikimori_links(body)
     
     if video_url and is_youtube:
         emoji = '🎬'
@@ -1026,6 +1076,7 @@ def main():
 
         if full_text:
             full_text = collapse_repeated_phrases(full_text)
+            full_text = clean_shikimori_links(full_text)
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
             if sentences:
                 title = normalize_whitespace(sentences[0])
