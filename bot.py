@@ -812,31 +812,43 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     title, body = rewrite_news(title, body)
 
-    if video_url or image_url:
-        full_message = build_caption_fit(title, body, emoji, 1024)
-    else:
-        full_message = build_post_html(title, body, emoji)
+    # Полный текст без обрезки под 1024 — пригодится для текстовых сообщений (лимит 4096)
+    full_message_long = build_post_html(title, body, emoji)
+    # Текст под лимит подписи к фото/видео (лимит 1024) — считаем лениво, только когда нужен
+    caption_message = None
+    def get_caption():
+        nonlocal caption_message
+        if caption_message is None:
+            caption_message = build_caption_fit(title, body, emoji, 1024)
+        return caption_message
 
     if video_url and not is_youtube:
         try:
-            bot.send_video(CHANNEL_ID, video_url, caption=full_message, parse_mode='HTML')
+            bot.send_video(CHANNEL_ID, video_url, caption=get_caption(), parse_mode='HTML')
             return
         except Exception as e:
             print(f"Не удалось отправить видео: {e}")
+            # Fallback: видео не отправилось — шлём полный текст сообщением (лимит 4096)
+            bot.send_message(CHANNEL_ID, full_message_long[:4096], parse_mode='HTML',
+                              disable_web_page_preview=True)
+            return
 
     if video_url and is_youtube:
         video_file = download_youtube_video(video_url)
         if video_file:
             try:
-                bot.send_video(CHANNEL_ID, video_file, caption=full_message, parse_mode='HTML')
+                bot.send_video(CHANNEL_ID, video_file, caption=get_caption(), parse_mode='HTML')
                 return
             except Exception as e:
                 print(f"Не удалось отправить скачанное видео: {e}")
 
+        # Fallback: видео скачать/отправить не удалось — используем ПОЛНЫЙ текст (лимит 4096),
+        # а не urезанный под caption
         short_url = to_short_youtube_url(video_url)
+        message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
         bot.send_message(
             CHANNEL_ID,
-            full_message + f"\n\nСмотреть: {short_url}",
+            message_with_link[:4096],
             parse_mode='HTML',
             disable_web_page_preview=False
         )
@@ -846,12 +858,13 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
         image_file = download_image(image_url, referer=link)
         if image_file:
             try:
-                bot.send_photo(CHANNEL_ID, image_file, caption=full_message, parse_mode='HTML')
+                bot.send_photo(CHANNEL_ID, image_file, caption=get_caption(), parse_mode='HTML')
                 return
             except Exception as e:
                 print(f"Не удалось отправить фото: {e}")
 
-    bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
+    # Фото нет или не удалось отправить — используем полный текст (лимит 4096)
+    bot.send_message(CHANNEL_ID, full_message_long[:4096], parse_mode='HTML', disable_web_page_preview=True)
 
 def fetch_shikimori_news_from_main_page():
     soup = get_page_soup(SHIKIMORI_MAIN)
