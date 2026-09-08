@@ -266,6 +266,69 @@ def extract_full_text_from_page(soup):
         return clean_html(str(main_content))
     return ""
 
+def collapse_repeated_phrases(text, max_words=8):
+    """
+    Убирает подряд идущие повторы одной и той же фразы длиной 1-8 слов.
+    Также удаляет дублирование, когда одно и то же слово повторяется подряд.
+    """
+    if not text:
+        return text
+    
+    # Сначала убираем простое дублирование слов подряд
+    # Например: "Наруто Наруто" -> "Наруто"
+    words = text.split()
+    result = []
+    i = 0
+    while i < len(words):
+        # Проверяем дублирование одного слова
+        if i + 1 < len(words) and words[i].lower() == words[i + 1].lower():
+            # Убираем дублирование специальных слов (имена, названия)
+            # Проверяем, что это не часть нормальной фразы (например, "то то")
+            if words[i].lower() not in ['то', 'на', 'по', 'за', 'из', 'от']:
+                result.append(words[i])
+                i += 2
+                continue
+        result.append(words[i])
+        i += 1
+    
+    # Теперь проверяем дублирование фраз (2-8 слов)
+    text = ' '.join(result)
+    words = text.split()
+    result = []
+    i = 0
+    n_words = len(words)
+    
+    while i < n_words:
+        matched = False
+        # Пробуем найти повтор фразы
+        for n in range(min(max_words, (n_words - i) // 2), 1, -1):
+            first = [w.lower().strip('«»"\'.,;:!?') for w in words[i:i + n]]
+            second = [w.lower().strip('«»"\'.,;:!?') for w in words[i + n:i + 2 * n]]
+            # Проверяем совпадение (игнорируем регистр и знаки препинания)
+            if first == second and any(first) and len(' '.join(first)) > 2:
+                result.extend(words[i:i + n])
+                i += 2 * n
+                matched = True
+                break
+        if not matched:
+            result.append(words[i])
+            i += 1
+    
+    return ' '.join(result)
+
+def clean_duplicate_title(title):
+    """Убирает дублирование в заголовке типа 'Режиссёр Наруто Наруто'"""
+    if not title:
+        return title
+    # Убираем повтор одинаковых слов подряд
+    words = title.split()
+    result = []
+    for w in words:
+        if result and w.lower() == result[-1].lower():
+            continue
+        result.append(w)
+    return ' '.join(result)
+
 def fetch_full_text(entry):
     link = entry.get('link', '')
 
@@ -276,7 +339,11 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    return collapse_repeated_phrases(full_text)
+                    # Чистим от дублей
+                    full_text = collapse_repeated_phrases(full_text)
+                    # Убираем повторы имён в начале
+                    full_text = re.sub(r'^([^.!?]+)\s+\1\s*', r'\1 ', full_text, flags=re.IGNORECASE)
+                    return full_text
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
@@ -533,28 +600,6 @@ def normalize_whitespace(text):
     if not text:
         return text
     return re.sub(r'\s+', ' ', text).strip()
-
-def collapse_repeated_phrases(text, max_words=5):
-    if not text:
-        return text
-    words = text.split()
-    result = []
-    i = 0
-    n_words = len(words)
-    while i < n_words:
-        matched = False
-        for n in range(min(max_words, (n_words - i) // 2), 0, -1):
-            first = [w.lower().strip('«»"\'') for w in words[i:i + n]]
-            second = [w.lower().strip('«»"\'') for w in words[i + n:i + 2 * n]]
-            if first == second and any(first):
-                result.extend(words[i:i + n])
-                i += 2 * n
-                matched = True
-                break
-        if not matched:
-            result.append(words[i])
-            i += 1
-    return ' '.join(result)
 
 def fix_quotes(text):
     result = []
@@ -852,6 +897,9 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
+    # Чистим заголовок от дублей
+    title = clean_duplicate_title(title)
+    
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
