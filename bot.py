@@ -6,7 +6,6 @@ import json
 import base64
 import uuid
 import time
-import random
 import urllib3
 import feedparser
 import telebot
@@ -23,13 +22,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
-# Убираем Cybersport RSS, оставляем только Goha и KG-Portal
 RSS_URLS = [
     "https://www.goha.ru/rss/anime",
     "https://kg-portal.ru/rss/news_anime.rss"
 ]
-
-ANIME_KEYWORDS = ["аниме", "anime", "манга", "manga", "ранобэ", "ranobe"]
 
 SHIKIMORI_MAIN = "https://shikimori.io/"
 
@@ -40,6 +36,13 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 gigachat_access_token = None
 gigachat_token_expires_at = 0
+
+# ---------- Утилита: длина текста как её считает Telegram ----------
+def telegram_len(s):
+    """Telegram считает длину текста в UTF-16 code units, а не в Python len()."""
+    if not s:
+        return 0
+    return len(s.encode('utf-16-le')) // 2
 
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
@@ -152,6 +155,7 @@ def giga_request(prompt, max_tokens=500):
         return ""
 
 def is_similar_news(title, body, recent_titles):
+    """Проверяет через GigaChat, является ли новость дубликатом по смыслу."""
     if not recent_titles:
         return False
 
@@ -240,42 +244,12 @@ def extract_full_text_from_page(soup):
         for elem in soup.select(bad_selector):
             elem.decompose()
 
-    # ---------- СПЕЦИАЛЬНО ДЛЯ CYBERSPORT ----------
-    meta_og_url = soup.find('meta', property='og:url')
-    is_cybersport = meta_og_url and 'cybersport.ru' in meta_og_url.get('content', '')
-
-    if is_cybersport:
-        main_content = soup.select_one('div.text-content.js-mediator-article')
-        if not main_content:
-            main_content = soup.select_one('div.text-content')
-        if not main_content:
-            main_content = soup.select_one('div.content_5HuK5')
-        if not main_content:
-            main_content = soup.select_one('article div.text-content')
-        
-        if main_content:
-            text_parts = []
-            for p in main_content.find_all(['p', 'div.paragraph']):
-                text = p.get_text(strip=True)
-                if text and len(text) > 10:
-                    text_parts.append(text)
-            
-            video_blocks = main_content.find_all('div', class_='embed-block--youtube')
-            if video_blocks:
-                text_parts.append("[ВИДЕО В СТАТЬЕ]")
-            
-            full_text = '\n\n'.join(text_parts)
-            if full_text:
-                return full_text[:3000]
-            
-            return clean_html(str(main_content))[:3000]
-
-    # ---------- ДЛЯ ДРУГИХ САЙТОВ ----------
-    main_content = soup.select_one('div.editor-body')
+    main_content = soup.select_one('div.editor-body')  # Goha.ru
     if not main_content:
-        main_content = soup.select_one('div.news_text')
+        main_content = soup.select_one('div.news_text')  # КГ-Портал
+
     if not main_content:
-        main_content = soup.select_one('div.body-inner')
+        main_content = soup.select_one('div.body-inner')  # Shikimori
 
     if not main_content:
         selectors = [
@@ -291,8 +265,7 @@ def extract_full_text_from_page(soup):
                 break
 
     if main_content:
-        return clean_html(str(main_content))[:3000]
-    
+        return clean_html(str(main_content))
     return ""
 
 def fetch_full_text(entry):
@@ -305,7 +278,7 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    return full_text[:2000]
+                    return full_text[:3000]
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
@@ -315,9 +288,8 @@ def fetch_full_text(entry):
         soup = get_page_soup(link)
         if soup:
             full_text = extract_full_text_from_page(soup)
-            if full_text and len(full_text) > 50:
+            if full_text:
                 return full_text[:3000]
-    
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -362,40 +334,16 @@ def fetch_image_url(entry, soup=None):
     if soup is None and link:
         soup = get_page_soup(link)
 
-    image_url = None
-    
-    # 1. Сначала пробуем og:image (самый надежный)
-    if soup:
-        og_image = soup.find('meta', property='og:image')
-        if og_image and og_image.get('content'):
-            image_url = og_image['content']
-            if image_url and '.svg' not in image_url.lower() and 'logo' not in image_url.lower():
-                print(f"  Найдена og:image: {image_url[:80]}")
-                return make_absolute(image_url, link)
-    
-    # 2. Пробуем Twitter image
-    if soup:
-        twitter_image = soup.find('meta', name='twitter:image')
-        if twitter_image and twitter_image.get('content'):
-            image_url = twitter_image['content']
-            if image_url and '.svg' not in image_url.lower() and 'logo' not in image_url.lower():
-                print(f"  Найдена twitter:image: {image_url[:80]}")
-                return make_absolute(image_url, link)
-    
-    # 3. Пробуем extract_image_from_page (но пропускаем SVG и логотипы)
     if soup:
         image = extract_image_from_page(soup, link)
-        if image and '.svg' not in image.lower() and 'logo' not in image.lower():
-            print(f"  Найдена картинка на странице: {image[:80]}")
+        if image:
             return image
 
-    # 4. Пробуем из entry
     image = extract_image_url_from_entry(entry)
-    if image and '.svg' not in image.lower() and 'logo' not in image.lower():
-        print(f"  Найдена картинка из entry: {image[:80]}")
+    if image:
         return image
 
-    print(f"  ❌ Картинка не найдена")
+    print(f"Картинка не найдена для {link}")
     return None
 
 def extract_image_url_from_entry(entry):
@@ -406,65 +354,36 @@ def extract_image_url_from_entry(entry):
             base_domain = 'https://kg-portal.ru'
         elif 'shikimori.one' in link:
             base_domain = 'https://shikimori.one'
-        elif 'cybersport.ru' in link:
-            base_domain = 'https://www.cybersport.ru'
 
-    if 'enclosures' in entry and entry.enclosures:
-        for enc in entry.enclosures:
-            if 'href' in enc:
-                url = enc['href']
-                if '.svg' not in url.lower() and 'logo' not in url.lower():
-                    return make_absolute(url, base_domain)
-            if 'url' in enc:
-                url = enc['url']
-                if '.svg' not in url.lower() and 'logo' not in url.lower():
-                    return make_absolute(url, base_domain)
-    
     if 'media_content' in entry:
         for media in entry.media_content:
             if 'url' in media:
-                url = media['url']
-                if '.svg' not in url.lower() and 'logo' not in url.lower():
-                    return make_absolute(url, base_domain)
-    
+                return make_absolute(media['url'], base_domain)
     if 'media_thumbnail' in entry:
         for media in entry.media_thumbnail:
             if 'url' in media:
-                url = media['url']
-                if '.svg' not in url.lower() and 'logo' not in url.lower():
-                    return make_absolute(url, base_domain)
-    
+                return make_absolute(media['url'], base_domain)
+    if 'enclosures' in entry and entry.enclosures:
+        for enc in entry.enclosures:
+            if 'href' in enc and enc.get('type', '').startswith('image'):
+                return make_absolute(enc['href'], base_domain)
+            if 'url' in enc and enc.get('type', '').startswith('image'):
+                return make_absolute(enc['url'], base_domain)
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary, re.IGNORECASE)
         if match:
-            url = match.group(1)
-            if '.svg' not in url.lower() and 'logo' not in url.lower():
-                return make_absolute(url, base_domain)
-        
-        match = re.search(r'https?://[^\s<>"]+\.(jpg|jpeg|png|webp)', summary, re.IGNORECASE)
-        if match:
-            return make_absolute(match.group(0), base_domain)
-    
+            return make_absolute(match.group(1), base_domain)
     content = entry.get('content', [])
     for c in content:
         if 'value' in c:
             match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', c['value'], re.IGNORECASE)
             if match:
-                url = match.group(1)
-                if '.svg' not in url.lower() and 'logo' not in url.lower():
-                    return make_absolute(url, base_domain)
-            
-            match = re.search(r'https?://[^\s<>"]+\.(jpg|jpeg|png|webp)', c['value'], re.IGNORECASE)
-            if match:
-                return make_absolute(match.group(0), base_domain)
-    
+                return make_absolute(match.group(1), base_domain)
     return None
 
 # ---------- Видео ----------
 def is_youtube_video(url):
-    if not url:
-        return False
     return (
         'youtube.com/watch' in url or
         'youtu.be/' in url or
@@ -495,56 +414,50 @@ def extract_video_url_from_page(soup):
     if not soup:
         return None, False
 
-    # 1. YouTube блоки Cybersport
-    youtube_blocks = soup.select('div.embed-block--youtube')
-    for block in youtube_blocks:
-        iframe = block.find('iframe')
-        if iframe and iframe.get('src'):
-            url = iframe['src']
-            if 'logo' in url.lower():
-                continue
-            if 'youtube' in url or 'youtu.be' in url:
-                return url, True
-    
-    # 2. Любые iframe
-    iframes = soup.find_all('iframe')
-    for iframe in iframes:
-        src = iframe.get('src', '')
-        if 'logo' in src.lower() or 'sponsor' in src.lower() or 'banner' in src.lower():
-            continue
-        if src and ('youtube' in src or 'youtu.be' in src):
-            return src, True
-    
-    # 3. Прямые ссылки на YouTube
-    for a in soup.find_all('a', href=True):
-        href = a['href']
-        if 'logo' in href.lower():
-            continue
-        if 'youtube.com/watch' in href or 'youtu.be/' in href:
-            return href, True
-    
-    # 4. Meta og:video
-    og_video = soup.find('meta', property='og:video')
-    if og_video and og_video.get('content'):
-        url = og_video['content']
-        if 'youtube' in url or 'youtu.be' in url:
-            return url, True
-    
-    # 5. video теги (для MP4 и других)
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
-        if src and 'logo' in src.lower():
-            return None, False
         if src and re.search(r'\.(mp4|webm)(\?.*)?$', src, re.IGNORECASE):
             return src, False
         source_tag = video_tag.select_one('source')
-        if source_tag and source_tag.get('src'):
-            src = source_tag['src']
-            if 'logo' in src.lower():
-                return None, False
-            if re.search(r'\.(mp4|webm)(\?.*)?$', src, re.IGNORECASE):
-                return src, False
+        if source_tag and source_tag.get('src') and re.search(r'\.(mp4|webm)(\?.*)?$', source_tag['src'], re.IGNORECASE):
+            return source_tag['src'], False
+
+    og_video = soup.select_one('meta[property="og:video"]')
+    if og_video and og_video.get('content'):
+        url = og_video['content']
+        if re.search(r'\.(mp4|webm)(\?.*)?$', url, re.IGNORECASE):
+            return url, False
+
+    yt_tag = soup.select_one('editor-body-youtube')
+    if yt_tag and yt_tag.get('url'):
+        url = yt_tag['url']
+        if is_youtube_video(url):
+            return url, True
+
+    iframe = soup.select_one('iframe[src*="youtube.com/embed"], iframe[src*="youtu.be/"]')
+    if iframe and iframe.get('src'):
+        return iframe['src'], True
+
+    if og_video and og_video.get('content'):
+        url = og_video['content']
+        if is_youtube_video(url):
+            return url, True
+
+    for a in soup.select('div.b-video.youtube a.video-link, a.video-link[data-href*="youtube"], a.video-link[href*="youtube"]'):
+        data_href = a.get('data-href') or a.get('href')
+        if data_href:
+            url = html.unescape(data_href)
+            if is_youtube_video(url):
+                return url, True
+
+    for a in soup.select('a.youtube'):
+        href = a.get('href', '')
+        match = re.search(r'url=([^&]+)', href)
+        if match:
+            url = html.unescape(match.group(1))
+            if is_youtube_video(url):
+                return url, True
 
     return None, False
 
@@ -554,22 +467,32 @@ def fetch_video_info(entry, soup=None):
         if link:
             soup = get_page_soup(link)
     if soup:
-        video_url, is_youtube = extract_video_url_from_page(soup)
-        if video_url and 'logo' in video_url.lower():
-            return None, False
-        return video_url, is_youtube
+        return extract_video_url_from_page(soup)
     return None, False
+
+def download_youtube_video(youtube_url):
+    try:
+        ydl_opts = {
+            'format': 'best[ext=mp4]',
+            'outtmpl': '-',
+            'quiet': True,
+            'noplaylist': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            video_url = info.get('url')
+            if video_url:
+                r = requests.get(video_url, stream=True, timeout=30)
+                r.raise_for_status()
+                video_bytes = io.BytesIO(r.content)
+                video_bytes.seek(0)
+                return video_bytes
+    except Exception as e:
+        print(f"Не удалось скачать YouTube-видео {youtube_url}: {e}")
+    return None
 
 def download_image(url, referer=None):
     try:
-        head = requests.head(url, timeout=10)
-        content_length = head.headers.get('content-length')
-        if content_length:
-            size_mb = int(content_length) / (1024 * 1024)
-            if size_mb > 10:
-                print(f"  Изображение слишком большое ({size_mb:.1f}MB), пропускаем")
-                return None
-        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
@@ -584,12 +507,12 @@ def download_image(url, referer=None):
 
 # ---------- Обработка текста ----------
 def simple_truncate_by_sentences(text, max_len):
-    if len(text) <= max_len:
+    if telegram_len(text) <= max_len:
         return text
     sentences = re.split(r'(?<=[.!?])\s+', text)
     result = ""
     for s in sentences:
-        if len(result) + len(s) + 1 > max_len:
+        if telegram_len(result) + telegram_len(s) + 1 > max_len:
             break
         result = (result + " " + s).strip()
     if not result:
@@ -597,16 +520,18 @@ def simple_truncate_by_sentences(text, max_len):
     return result
 
 def truncate_by_words(text, max_len):
-    if len(text) <= max_len:
+    """Обрезает текст по словам так, чтобы итог не превышал max_len в UTF-16 code units."""
+    if telegram_len(text) <= max_len:
         return text
     words = text.split()
     result = []
     current_len = 0
     for w in words:
-        if current_len + len(w) + 1 > max_len:
+        w_len = telegram_len(w) + 1  # +1 на пробел
+        if current_len + w_len > max_len:
             break
         result.append(w)
-        current_len += len(w) + 1
+        current_len += w_len
     return ' '.join(result)
 
 def strip_html_tags(text):
@@ -755,10 +680,10 @@ def rewrite_news(title, body):
     if not token:
         return title, body
 
-    body_part = body[:2000]
+    body_part = body[:3000]
 
     prompt = f"""Перефразируй следующий текст новости, сохраняя все факты, названия и имена.
-Не увеличивай объём: если текст короткий, оставь его коротким. Если текст длинный, можешь оставить его примерно той же длины, но не более 2000 символов.
+Не увеличивай объём: если текст короткий, оставь его коротким. Если текст длинный, можешь оставить его примерно той же длины, но не более 3000 символов.
 Не добавляй домыслы и не придумывай подробности.
 Разбей на абзацы по 2 предложения (если возможно). Используй кавычки «».
 Не задавай вопросов, не пиши от себя.
@@ -788,7 +713,7 @@ def rewrite_news(title, body):
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.4,
-                "max_tokens": 1200
+                "max_tokens": 1500
             },
             timeout=30,
             verify=False
@@ -825,88 +750,57 @@ def rewrite_news(title, body):
         return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
-    # Сначала строим полное сообщение
+    """Формирует подпись к фото/видео, максимально используя лимит max_len
+    (в UTF-16 code units, как считает сам Telegram)."""
     full_html = build_post_html(title, body, emoji)
-    
-    # Проверяем длину без HTML-тегов
     plain_text = strip_html_tags(full_html)
-    
-    # Если помещается - возвращаем как есть
-    if len(plain_text) <= max_len:
+
+    if telegram_len(plain_text) <= max_len:
         return full_html
 
-    # Если не помещается - обрезаем умнее
-    # Разбиваем на части
-    title_esc = escape_html(title)
-    separator = "┄┄┄ ✦ ┄┄┄"
-    
     hashtags = ["#аниме", "#новости"]
     title_tag = extract_title_hashtag(title)
     if title_tag and title_tag not in hashtags:
         hashtags.append(title_tag)
     tags_str = " ".join(hashtags)
-    
-    # Базовая часть (заголовок + разделитель + хэштеги)
-    base_html = f"{emoji} <b>{title_esc}</b>\n{separator}\n"
-    footer = f"\n\n🏷️ {tags_str}"
-    
-    base_len = len(strip_html_tags(base_html)) + len(strip_html_tags(footer))
-    available = max_len - base_len - 3  # 3 символа на "..."
-    
+
+    title_plain = f"{emoji} {title}"
+    separator_plain = "┄┄┄ ✦ ┄┄┄"
+    footer_plain = f"🏷️ {tags_str}"
+
+    # Точный запас под заголовок, разделитель, подвал и переносы строк между ними.
+    # Структура: title \n separator \n body \n\n footer  -> 4 переноса строки
+    base_len = (telegram_len(title_plain) + telegram_len(separator_plain) +
+                telegram_len(footer_plain) + 4)
+    available = max_len - base_len
+
     if available < 50:
-        # Если совсем мало места - обрезаем сильно
-        return truncate_by_words(plain_text, max_len)
-    
-    # Форматируем тело и обрезаем по предложениям
+        # Даже без тела текста укладываемся впритык — отдаём хотя бы заголовок и теги
+        return f"{emoji} <b>{escape_html(title)}</b>\n\n🏷️ {tags_str}"
+
     body_formatted = format_news_body(body)
-    
-    # Убираем HTML-теги для подсчёта
-    body_plain = strip_html_tags(body_formatted)
-    
-    # Если тело помещается - возвращаем полное сообщение
-    if len(body_plain) <= available:
-        return f"{base_html}{body_formatted}{footer}"
-    
-    # Иначе обрезаем по предложениям
-    sentences = re.split(r'(?<=[.!?])\s+', body_plain)
-    result = []
+    body_paragraphs = body_formatted.split('\n\n')
+    chosen = []
     current_len = 0
-    
-    for sent in sentences:
-        sent_len = len(sent)
-        if current_len + sent_len + 2 <= available:
-            result.append(sent)
-            current_len += sent_len + 2
+    for para in body_paragraphs:
+        para_plain = strip_html_tags(para)
+        sep_len = 2 if chosen else 0  # \n\n между уже выбранными абзацами
+        para_len = telegram_len(para_plain)
+        if current_len + para_len + sep_len <= available:
+            chosen.append(para)
+            current_len += para_len + sep_len
         else:
-            # Если предложение слишком длинное - обрезаем по словам
-            remaining = available - current_len
+            remaining = available - current_len - sep_len
             if remaining > 20:
-                words = sent.split()
-                truncated = []
-                for w in words:
-                    if current_len + len(w) + 1 <= available:
-                        truncated.append(w)
-                        current_len += len(w) + 1
-                    else:
-                        break
-                if truncated:
-                    result.append(' '.join(truncated) + '...')
+                truncated_para = truncate_by_words(para_plain, remaining)
+                if truncated_para:
+                    chosen.append(truncated_para)
             break
-    
-    truncated_body = ' '.join(result)
-    
-    # Если тело слишком короткое - добавляем троеточие
-    if len(truncated_body) < len(body_plain) and not truncated_body.endswith('...'):
-        truncated_body += '...'
-    
-    # Если тело вообще пустое - используем заголовок
-    if not truncated_body:
-        truncated_body = title
-    
-    return f"{base_html}{truncated_body}{footer}"
+
+    truncated_body = '\n\n'.join(chosen)
+    return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
-    # Определяем эмодзи
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
@@ -916,114 +810,49 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    # Переписываем новость через GigaChat
     title, body = rewrite_news(title, body)
 
-    # Ограничиваем длину тела
-    MAX_TEXT_LENGTH = 2500
-    if body and len(body) > MAX_TEXT_LENGTH:
-        body = truncate_by_words(body, MAX_TEXT_LENGTH)
-        if not body.endswith('...'):
-            body += '...'
-
-    # --- ЕСЛИ ЕСТЬ ВИДЕО ---
-    if video_url:
-        # Проверяем, что это не логотип
-        if 'logo' in video_url.lower():
-            print(f"Пропускаем логотип: {video_url}")
-            video_url = None
-        else:
-            # Проверяем, YouTube ли это
-            is_yt = is_youtube_video(video_url)
-            
-            if is_yt:
-                # Это YouTube - отправляем ссылку
-                short_url = to_short_youtube_url(video_url)
-                full_message = build_post_html(title, body, emoji)
-                try:
-                    bot.send_message(
-                        CHANNEL_ID,
-                        full_message + f"\n\n🎬 Смотреть видео: {short_url}",
-                        parse_mode='HTML',
-                        disable_web_page_preview=False
-                    )
-                    return
-                except Exception as e:
-                    print(f"Не удалось отправить ссылку на видео: {e}")
-            else:
-                # Это не YouTube - пробуем отправить как видео
-                full_message = build_caption_fit(title, body, emoji, 1024)
-                try:
-                    bot.send_video(CHANNEL_ID, video_url, caption=full_message, parse_mode='HTML')
-                    return
-                except Exception as e:
-                    print(f"Не удалось отправить видео: {e}")
-                    # Если не получилось - отправляем ссылку
-                    full_message = build_post_html(title, body, emoji)
-                    bot.send_message(
-                        CHANNEL_ID,
-                        full_message + f"\n\n🎬 Видео: {video_url}",
-                        parse_mode='HTML',
-                        disable_web_page_preview=False
-                    )
-                    return
-
-    # --- ЕСЛИ ЕСТЬ ИЗОБРАЖЕНИЕ ---
-    if image_url:
-        # Проверяем, что это не логотип и не SVG
-        if 'logo' in image_url.lower() or '.svg' in image_url.lower():
-            print(f"Пропускаем логотип/SVG: {image_url}")
-            image_url = None
-        else:
-            # Формируем подпись для картинки
-            full_message = build_caption_fit(title, body, emoji, 1024)
-            
-            # Проверяем длину подписи
-            plain_text = strip_html_tags(full_message)
-            
-            if len(plain_text) <= 1024:
-                # Если помещается - отправляем с картинкой
-                image_file = download_image(image_url, referer=link)
-                if image_file:
-                    try:
-                        bot.send_photo(CHANNEL_ID, image_file, caption=full_message, parse_mode='HTML')
-                        return
-                    except Exception as e:
-                        print(f"Не удалось отправить фото: {e}")
-            else:
-                # Если не помещается - сначала картинка с заголовком, потом текст
-                try:
-                    # Отправляем картинку с коротким заголовком
-                    short_caption = f"{emoji} <b>{escape_html(title)}</b>"
-                    image_file = download_image(image_url, referer=link)
-                    if image_file:
-                        bot.send_photo(CHANNEL_ID, image_file, caption=short_caption, parse_mode='HTML')
-                    
-                    # Отправляем полный текст отдельным сообщением
-                    full_text_message = build_post_html(title, body, '📄')
-                    if len(full_text_message) > 4096:
-                        for i in range(0, len(full_text_message), 4096):
-                            part = full_text_message[i:i+4096]
-                            bot.send_message(CHANNEL_ID, part, parse_mode='HTML', disable_web_page_preview=True)
-                    else:
-                        bot.send_message(CHANNEL_ID, full_text_message, parse_mode='HTML', disable_web_page_preview=True)
-                    return
-                except Exception as e:
-                    print(f"Ошибка при отправке с картинкой: {e}")
-                    # Если ошибка - отправляем просто текстом
-                    pass
-
-    # --- ОТПРАВКА ТЕКСТОМ (без картинки или если картинка не отправилась) ---
-    full_message = build_post_html(title, body, emoji)
-    
-    if len(full_message) > 4096:
-        for i in range(0, len(full_message), 4096):
-            part = full_message[i:i+4096]
-            bot.send_message(CHANNEL_ID, part, parse_mode='HTML', disable_web_page_preview=True)
+    if video_url or image_url:
+        full_message = build_caption_fit(title, body, emoji, 1024)
     else:
-        bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
+        full_message = build_post_html(title, body, emoji)
 
-# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА SHIKIMORI ----------
+    if video_url and not is_youtube:
+        try:
+            bot.send_video(CHANNEL_ID, video_url, caption=full_message, parse_mode='HTML')
+            return
+        except Exception as e:
+            print(f"Не удалось отправить видео: {e}")
+
+    if video_url and is_youtube:
+        video_file = download_youtube_video(video_url)
+        if video_file:
+            try:
+                bot.send_video(CHANNEL_ID, video_file, caption=full_message, parse_mode='HTML')
+                return
+            except Exception as e:
+                print(f"Не удалось отправить скачанное видео: {e}")
+
+        short_url = to_short_youtube_url(video_url)
+        bot.send_message(
+            CHANNEL_ID,
+            full_message + f"\n\nСмотреть: {short_url}",
+            parse_mode='HTML',
+            disable_web_page_preview=False
+        )
+        return
+
+    if image_url:
+        image_file = download_image(image_url, referer=link)
+        if image_file:
+            try:
+                bot.send_photo(CHANNEL_ID, image_file, caption=full_message, parse_mode='HTML')
+                return
+            except Exception as e:
+                print(f"Не удалось отправить фото: {e}")
+
+    bot.send_message(CHANNEL_ID, full_message, parse_mode='HTML', disable_web_page_preview=True)
+
 def fetch_shikimori_news_from_main_page():
     soup = get_page_soup(SHIKIMORI_MAIN)
     if not soup:
@@ -1070,89 +899,12 @@ def fetch_shikimori_news_from_main_page():
 
     return news_items
 
-# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА CYBERSPORT СО СТРАНИЦЫ ТЕГА ----------
-def fetch_cybersport_anime_news():
-    """
-    Парсит страницу https://www.cybersport.ru/tags/anime
-    и возвращает список словарей: {'title': ..., 'link': ..., 'image_url': ...}
-    """
-    url = "https://www.cybersport.ru/tags/anime?sort=-publishedAt"
-    
-    # Добавляем правильные заголовки, чтобы сайт не блокировал
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-        'Referer': 'https://www.cybersport.ru/',
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'lxml')
-    except Exception as e:
-        print(f"Не удалось загрузить страницу Cybersport Anime: {e}")
-        return []
-
-    news_items = []
-    articles = soup.select('article')
-    
-    print(f"  Найдено {len(articles)} статей на странице")
-    
-    for article in articles:
-        # Ищем ссылку
-        link_tag = article.find('a', class_='link_CocWY')
-        if not link_tag:
-            continue
-        link = link_tag.get('href')
-        if link.startswith('/'):
-            link = urljoin('https://www.cybersport.ru', link)
-
-        # Ищем заголовок
-        title_tag = article.find('h3', class_='title_nSS03')
-        if not title_tag:
-            continue
-        title = title_tag.get_text(strip=True)
-
-        # Ищем картинку
-        image_url = None
-        img_tag = article.find('img')
-        if img_tag:
-            src = img_tag.get('src') or img_tag.get('data-src')
-            if src:
-                image_url = urljoin('https://www.cybersport.ru', src)
-        
-        # Если картинка не найдена - пробуем через background-image
-        if not image_url:
-            style = article.get('style', '')
-            match = re.search(r'background-image:\s*url\(([^)]+)\)', style)
-            if match:
-                image_url = match.group(1).strip('"\'')
-
-        # Пропускаем логотипы и SVG
-        if image_url:
-            if 'logo' in image_url.lower() or '.svg' in image_url.lower():
-                image_url = None
-
-        news_items.append({
-            'title': title,
-            'link': link,
-            'image_url': image_url,
-            'source': 'cybersport_tag'
-        })
-
-    return news_items
-
-# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
 def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
     new_posts = 0
-    
-    print(f"Загружено {len(links)} ссылок и {len(titles)} заголовков")
 
-    # ----- 1. Shikimori -----
-    print("Обрабатываю новости Shikimori...")
+    print("Обрабатываю новости Shikimori с главной страницы...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
         link = news['link']
@@ -1164,6 +916,7 @@ def main():
         soup = get_page_soup(link)
         full_text = fetch_full_text({'link': link, 'title': title})
 
+        # Убираем дублирование: заголовок = первое предложение, остальное = тело
         if full_text:
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
             if sentences:
@@ -1193,64 +946,6 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
-    # ----- 2. Cybersport (со страницы тега) -----
-    print("Обрабатываю новости Cybersport (страница тега)...")
-    cybersport_news = fetch_cybersport_anime_news()
-    print(f"Найдено {len(cybersport_news)} новостей на Cybersport")
-    
-    for news in cybersport_news:
-        link = news['link']
-        title = news['title']
-        
-        if is_duplicate(link, title, links, titles):
-            print(f"Дубликат пропущен: {title}")
-            continue
-
-        # Загружаем страницу новости для получения полного текста и видео
-        soup = get_page_soup(link)
-        if not soup:
-            print(f"Не удалось загрузить страницу: {link}")
-            continue
-            
-        full_text = fetch_full_text({'link': link, 'title': title})
-
-        if full_text:
-            sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
-            if sentences:
-                title = sentences[0]
-                full_text = ' '.join(sentences[1:])
-            full_text = remove_duplicate_start(title, full_text)
-
-        if is_similar_news(title, full_text, recent_titles):
-            print(f"Похожая новость пропущена: {title}")
-            continue
-
-        # Берём картинку со страницы тега
-        image_url = news.get('image_url')
-        # Если на странице тега нет картинки - пробуем найти на странице новости
-        if not image_url:
-            print(f"  Картинки нет на странице тега, ищем на странице новости...")
-            image_url = fetch_image_url({'link': link}, soup)
-            
-        video_url, is_youtube = fetch_video_info({'link': link}, soup)
-        print(f"Видео: {video_url[:50] if video_url else 'нет'}")
-
-        name_pairs = extract_russian_anime_names(soup)
-        if name_pairs:
-            title = replace_anime_names(title, name_pairs)
-            full_text = replace_anime_names(full_text, name_pairs)
-
-        try:
-            send_post(title, full_text, link, image_url, video_url, is_youtube)
-            links.add(link)
-            titles.add(normalize_title(title))
-            recent_titles.append({"title": title, "timestamp": time.time()})
-            new_posts += 1
-            print(f"Опубликовано (Cybersport): {title}")
-        except Exception as e:
-            print(f"Ошибка отправки для {link}: {e}")
-
-    # ----- 3. RSS (Goha, KG-Portal) -----
     for rss_url in RSS_URLS:
         print(f"Обрабатываю ленту: {rss_url}")
         try:
@@ -1259,14 +954,13 @@ def main():
             print(f"Не удалось получить ленту {rss_url}: {e}")
             continue
 
-        for entry in feed.entries[:20]:
+        for entry in feed.entries[:10]:
             if is_podcast_entry(entry):
                 print(f"Пропущен подкаст: {entry.get('title')}")
                 continue
 
             link = entry.get('link', '')
             title = entry.get('title', 'Без названия')
-
             if is_duplicate(link, title, links, titles):
                 print(f"Дубликат пропущен: {title}")
                 continue
@@ -1295,7 +989,6 @@ def main():
         save_posted(links, titles)
         save_recent_titles(recent_titles)
         print(f"Сохранено {new_posts} новых записей в {POSTED_FILE}")
-        print(f"Всего: {len(links)} ссылок, {len(titles)} заголовков")
     else:
         print("Новых новостей нет.")
 
