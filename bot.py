@@ -278,7 +278,7 @@ def fetch_full_text(entry):
             if body_inner:
                 full_text = clean_html(str(body_inner))
                 if full_text:
-                    return full_text[:3000]
+                    return collapse_repeated_phrases(full_text[:3000])
         summary = entry.get('summary', '') or entry.get('description', '')
         if summary:
             return clean_html(summary)
@@ -289,7 +289,7 @@ def fetch_full_text(entry):
         if soup:
             full_text = extract_full_text_from_page(soup)
             if full_text:
-                return full_text[:3000]
+                return collapse_repeated_phrases(full_text[:3000])
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
         return clean_html(summary)
@@ -534,8 +534,57 @@ def truncate_by_words(text, max_len):
         current_len += w_len
     return ' '.join(result)
 
+def truncate_to_full_sentences(text, max_len):
+    """Обрезает текст по границе предложений, чтобы не обрывать фразу на полуслове.
+    Возвращает пустую строку, если даже одно предложение не помещается."""
+    if telegram_len(text) <= max_len:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    result = []
+    current_len = 0
+    for s in sentences:
+        sep_len = 1 if result else 0
+        s_len = telegram_len(s) + sep_len
+        if current_len + s_len <= max_len:
+            result.append(s)
+            current_len += s_len
+        else:
+            break
+    return ' '.join(result)
+
 def strip_html_tags(text):
     return re.sub(r'<[^>]+>', '', text)
+
+def normalize_whitespace(text):
+    """Схлопывает любые пробельные символы (включая переносы строк) в один пробел."""
+    if not text:
+        return text
+    return re.sub(r'\s+', ' ', text).strip()
+
+def collapse_repeated_phrases(text, max_words=5):
+    """Убирает подряд идущие повторы одной и той же фразы длиной 1-5 слов.
+    Типичный артефакт вёрстки сайтов, где имя/название дублируется соседними
+    элементами (например, оригинал + транскрипция, спрятанные друг под другом)."""
+    if not text:
+        return text
+    words = text.split()
+    result = []
+    i = 0
+    n_words = len(words)
+    while i < n_words:
+        matched = False
+        for n in range(min(max_words, (n_words - i) // 2), 0, -1):
+            first = [w.lower().strip('«»"\'') for w in words[i:i + n]]
+            second = [w.lower().strip('«»"\'') for w in words[i + n:i + 2 * n]]
+            if first == second and any(first):
+                result.extend(words[i:i + n])
+                i += 2 * n
+                matched = True
+                break
+        if not matched:
+            result.append(words[i])
+            i += 1
+    return ' '.join(result)
 
 def fix_quotes(text):
     result = []
@@ -628,7 +677,7 @@ def extract_title_hashtag(title):
     return None
 
 def build_post_html(title, body, emoji='📄'):
-    title_esc = escape_html(title)
+    title_esc = escape_html(normalize_whitespace(title))
     body_formatted = format_news_body(body) if body else ""
 
     parts = [f"{emoji} <b>{title_esc}</b>"]
@@ -669,7 +718,11 @@ def remove_duplicate_start(title, body):
         body_clean = ' '.join(sentences[1:]).strip()
     return body_clean
 
-def rewrite_news(title, body):
+def rewrite_news(title, body, target_len=None):
+    """Переписывает новость через GigaChat.
+    Если задан target_len — просим модель уложиться примерно в это количество символов
+    (в UTF-16 code units), но обязательно закончить мысль, а не просто ужать текст
+    произвольным образом. Так финальный пост не придётся дорезать механически."""
     if not GIGACHAT_AUTHORIZATION_KEY:
         return title, body
 
@@ -677,18 +730,31 @@ def rewrite_news(title, body):
     if not token:
         return title, body
 
-    body_part = body[:3000]
-    target_len = telegram_len(body_part)
-    min_len = int(target_len * 0.85)
+    body_part = body[:4000]
+    source_len = telegram_len(body_part)
+
+    if target_len is None:
+        # Старое поведение — просто пересказать без искусственного сжатия
+        target_len = source_len
+
+    needs_compression = source_len > target_len * 1.1
+
+    if needs_compression:
+        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: примерно {target_len} символов (можно на 10-15% меньше, но не больше).
+Оригинал длиннее цели, поэтому нужно СОКРАТИТЬ текст — но не механической обрезкой, а умным пересказом:
+убери второстепенные детали и подробности, оставь только главную суть, ключевые факты, даты, имена и названия.
+Текст ОБЯЗАТЕЛЬНО должен быть завершённым: заканчиваться полным предложением с точкой, доводить мысль до конца.
+Никогда не обрывай текст на середине предложения или мысли — лучше выбрось менее важную деталь целиком,
+чем оставить незаконченную фразу."""
+    else:
+        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: примерно {target_len} символов, плюс-минус немного.
+Не сокращай текст искусственно и не выбрасывай детали без необходимости — просто перескажи своими словами
+примерно того же объёма. Текст должен заканчиваться полным, законченным предложением."""
 
     prompt = f"""Ты — опытный журналист новостного портала об аниме. Перепиши текст новости своими словами,
 как будто пишешь для своей редакции — живо, естественно, без канцелярита и без ощущения, что текст писала нейросеть.
 
-ГЛАВНОЕ ПРАВИЛО ПО ДЛИНЕ:
-Оригинальный текст — {target_len} символов. Твой пересказ должен быть НЕ КОРОЧЕ {min_len} символов
-(в идеале — той же длины, {target_len} символов, плюс-минус немного).
-Не сокращай, не резюмируй, не выбрасывай детали, не сжимай текст в короткую выжимку.
-Если абзац длинный — перефразируй его так же подробно, тем же по объёму текстом, а не одним предложением.
+{length_instruction}
 
 СТИЛЬ — ПИШИ КАК ЖИВОЙ ЧЕЛОВЕК:
 - Пиши так, как обычный человек рассказывает интересную новость другу: простыми, естественными фразами.
@@ -731,11 +797,11 @@ def rewrite_news(title, body):
             json={
                 "model": "GigaChat-3-Ultra",
                 "messages": [
-                    {"role": "system", "content": "Ты — опытный редактор аниме-новостей, который пишет живым человеческим языком, а не канцеляритом. Ты никогда не сокращаешь и не резюмируешь текст — только пересказываешь своими словами с сохранением объёма."},
+                    {"role": "system", "content": "Ты — опытный редактор аниме-новостей, который пишет живым человеческим языком, а не канцеляритом. Ты всегда укладываешься в заданную длину текста и всегда доводишь мысль до конца, не обрывая текст на полуслове."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.6,
-                "max_tokens": min(4000, target_len + 600)
+                "max_tokens": min(4000, max(800, target_len + 400))
             },
             timeout=30,
             verify=False
@@ -765,10 +831,11 @@ def rewrite_news(title, body):
         if new_title and new_body:
             new_len = telegram_len(new_body)
             print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
-            print(f"[DEBUG] Длина после рерайта: {new_len} из {target_len} (мин. допустимая: {min_len})")
-            if new_len < min_len:
-                # GigaChat всё равно сильно сократил текст — публикуем оригинал, а не урезанную версию
-                print(f"[WARNING] Рерайт слишком короткий ({new_len} < {min_len}), используем оригинальный текст")
+            print(f"[DEBUG] Длина после рерайта: {new_len}, цель: {target_len}, исходник: {source_len}")
+            # Если ушли слишком далеко за целевую длину (в обе стороны) — что-то пошло не так,
+            # безопаснее вернуть оригинал и дать сработать обрезке по предложениям как safety net
+            if new_len > target_len * 1.25 or new_len < target_len * 0.5:
+                print(f"[WARNING] Длина рерайта сильно отклоняется от цели, используем оригинальный текст")
                 return title, body
             return new_title, new_body
         else:
@@ -779,7 +846,11 @@ def rewrite_news(title, body):
 
 def build_caption_fit(title, body, emoji, max_len=1024):
     """Формирует подпись к фото/видео, максимально используя лимит max_len
-    (в UTF-16 code units, как считает сам Telegram)."""
+    (в UTF-16 code units, как считает сам Telegram).
+    Это safety net: в норме текст уже приходит нужной длины из rewrite_news
+    (см. target_len), поэтому обрезка здесь почти не должна срабатывать.
+    Если всё же приходится обрезать — режем по границе целого предложения."""
+    title = normalize_whitespace(title)
     full_html = build_post_html(title, body, emoji)
     plain_text = strip_html_tags(full_html)
 
@@ -793,14 +864,11 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     separator_plain = "┄┄┄ ✦ ┄┄┄"
     footer_plain = f"🏷️ {tags_str}"
 
-    # Точный запас под заголовок, разделитель, подвал и переносы строк между ними.
-    # Структура: title \n separator \n body \n\n footer  -> 4 переноса строки
     base_len = (telegram_len(title_plain) + telegram_len(separator_plain) +
                 telegram_len(footer_plain) + 4)
     available = max_len - base_len
 
     if available < 50:
-        # Даже без тела текста укладываемся впритык — отдаём хотя бы заголовок и теги
         return f"{emoji} <b>{escape_html(title)}</b>\n\n🏷️ {tags_str}"
 
     body_formatted = format_news_body(body)
@@ -809,7 +877,7 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     current_len = 0
     for para in body_paragraphs:
         para_plain = strip_html_tags(para)
-        sep_len = 2 if chosen else 0  # \n\n между уже выбранными абзацами
+        sep_len = 2 if chosen else 0
         para_len = telegram_len(para_plain)
         if current_len + para_len + sep_len <= available:
             chosen.append(para)
@@ -817,7 +885,7 @@ def build_caption_fit(title, body, emoji, max_len=1024):
         else:
             remaining = available - current_len - sep_len
             if remaining > 20:
-                truncated_para = truncate_by_words(para_plain, remaining)
+                truncated_para = truncate_to_full_sentences(para_plain, remaining)
                 if truncated_para:
                     chosen.append(truncated_para)
             break
@@ -835,8 +903,18 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     else:
         emoji = '📄'
 
-    print(f"[DEBUG] Текст ДО рерайта: {telegram_len(body)} символов")
-    title, body = rewrite_news(title, body)
+    # Заранее прикидываем, сколько символов реально доступно под текст новости,
+    # чтобы попросить GigaChat уложиться в этот бюджет и не резать пост потом.
+    # YouTube-видео больше не прикрепляем как файл — оно всегда идёт текстом со ссылкой,
+    # поэтому под него действует полный лимит текстового сообщения (4096), а не подписи.
+    has_media = bool(image_url) or bool(video_url and not is_youtube)
+    max_len_for_post = 1024 if has_media else 4096
+    # Резерв под заголовок, разделитель, хэштеги и переносы строк (эмпирически)
+    shell_reserve = telegram_len(title) + 90
+    target_len = max(150, max_len_for_post - shell_reserve)
+
+    print(f"[DEBUG] Текст ДО рерайта: {telegram_len(body)} символов, целевая длина: {target_len}")
+    title, body = rewrite_news(title, body, target_len=target_len)
     print(f"[DEBUG] Текст ПОСЛЕ рерайта: {telegram_len(body)} символов")
 
     # Полный текст без обрезки под 1024 — пригодится для текстовых сообщений (лимит 4096)
@@ -846,7 +924,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     def get_caption():
         nonlocal caption_message
         if caption_message is None:
-            caption_message = build_caption_fit(title, body, emoji, 1024)
+            caption_message = build_caption_fit(title, body, emoji, link=link, max_len=1024)
             print(f"[DEBUG] Итоговая подпись (caption): {telegram_len(caption_message)} символов")
         return caption_message
 
@@ -862,16 +940,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
 
     if video_url and is_youtube:
-        video_file = download_youtube_video(video_url)
-        if video_file:
-            try:
-                bot.send_video(CHANNEL_ID, video_file, caption=get_caption(), parse_mode='HTML')
-                return
-            except Exception as e:
-                print(f"Не удалось отправить скачанное видео: {e}")
-
-        # Fallback: видео скачать/отправить не удалось — используем ПОЛНЫЙ текст (лимит 4096),
-        # а не urезанный под caption
+        # Видео не скачиваем — сразу отправляем текстом со ссылкой на YouTube.
+        # Telegram сам подтянет превью с плеером по ссылке.
         short_url = to_short_youtube_url(video_url)
         message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
         bot.send_message(
@@ -959,9 +1029,10 @@ def main():
 
         # Убираем дублирование: заголовок = первое предложение, остальное = тело
         if full_text:
+            full_text = collapse_repeated_phrases(full_text)
             sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
             if sentences:
-                title = sentences[0]
+                title = normalize_whitespace(sentences[0])
                 full_text = ' '.join(sentences[1:])
             full_text = remove_duplicate_start(title, full_text)
 
