@@ -2,18 +2,22 @@ import os
 import re
 import random
 import time
-import uuid
 import io
 import urllib3
 import telebot
 import requests
+import google.generativeai as genai
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Токены и ID
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Настройка Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # === ЖЕСТКАЯ ПРИВЯЗКА ПУТЕЙ К ПАПКЕ СКРИПТА ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,99 +28,36 @@ LAST_MEDIA_TYPE_FILE = os.path.join(BASE_DIR, "last_media_type.txt")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-gigachat_access_token = None
-gigachat_token_expires_at = 0
-
 # ==========================================
-# 1. РАБОТА С GIGACHAT
+# 1. РАБОТА С GEMINI (ТЕКСТОВЫЕ ВОПРОСЫ)
 # ==========================================
 
-def get_gigachat_token():
-    global gigachat_access_token, gigachat_token_expires_at
-
-    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
-        return gigachat_access_token
-
-    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json",
-        "RqUID": str(uuid.uuid4()),
-        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
-    }
-    data = {"scope": "GIGACHAT_API_PERS"}
-    
-    for attempt in range(3):
-        try:
-            r = requests.post(url, headers=headers, data=data, timeout=30, verify=False)
-            r.raise_for_status()
-            token_data = r.json()
-            gigachat_access_token = token_data.get("access_token")
-            expires_at = token_data.get("expires_at")
-            if expires_at:
-                gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
-            else:
-                gigachat_token_expires_at = time.time() + 1800
-            return gigachat_access_token
-        except Exception as e:
-            print(f"Попытка {attempt + 1}: Ошибка получения токена GigaChat: {e}")
-            time.sleep(3)
-            
-    return None
-
-def giga_request(prompt, token, max_tokens=300):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Request-ID": str(uuid.uuid4()),
-        "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.2"
-    }
-    payload = {
-        "model": "GigaChat-3-Ultra",
-        "messages": [
-            {
-                "role": "system", 
-                "content": (
-                    "Ты — харизматичный ведущий викторины по аниме. "
-                    "Генерируй ровно один короткий вопрос без вводных слов. "
-                    "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
-                    "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме в тексте своего вопроса!"
-                )
-            },
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.8,
-        "max_tokens": max_tokens
-    }
-    
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                "https://api.giga.chat/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30,
-                verify=False
+def gemini_request(prompt):
+    try:
+        model = genai.GenerativeModel(
+            model_name='gemini-1.5-flash',
+            system_instruction=(
+                "Ты — харизматичный ведущий викторины по аниме. "
+                "Генерируй ровно один короткий креативный вопрос без вводных слов (таких как 'Конечно, вот вопрос:' и т.д.). "
+                "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
+                "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме или имена главных героев в тексте своего вопроса! "
+                "Пиши так, чтобы было интересно угадывать."
             )
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"Попытка {attempt + 1}: Ошибка GigaChat (генерация): {e}")
-            time.sleep(3)
-            
-    return ""
+        )
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[ERROR] Ошибка генерации Gemini: {e}")
+        return ""
 
 def clean_question(text):
     if not text:
         return ""
-    text = re.sub(r'Как и любая языковая модель.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'Ответ сгенерирован нейросетевой моделью.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
+    # Очистка от возможных Markdown-выделений, если нейросеть их добавит
+    text = text.replace('**', '').replace('*', '')
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     if lines:
-        question = lines[0]
-        question = re.sub(r'\.{3,}$', '', question).strip()
-        return question
+        return " ".join(lines)
     return ""
 
 def is_answer_in_question(question, anime_name):
@@ -140,14 +81,13 @@ def get_shikimori_info(anime_name):
         
         if res and isinstance(res, list) and len(res) > 0:
             return res[0]['id'], res[0]['name']
-    except Exception as e:
+    except Exception:
         pass
     return None, None
 
 def fetch_anime_image(anime_name):
     anime_id, _ = get_shikimori_info(anime_name)
-    if not anime_id:
-        return None
+    if not anime_id: return None
         
     try:
         headers = {"User-Agent": "AnimeQuizBot"}
@@ -169,8 +109,7 @@ def fetch_anime_audio(anime_name):
         url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos.audio"
         res = requests.get(url, timeout=20).json()
         
-        if not res.get('anime'):
-            return None
+        if not res.get('anime'): return None
             
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
@@ -182,10 +121,8 @@ def fetch_anime_audio(anime_name):
                     audio = video.get('audio')
                     if audio and audio.get('link'):
                         return audio['link']
-                        
-        print(f"[DEBUG] Для '{anime_name}' не найдено аудио.")
-    except Exception as e:
-        print(f"[ERROR] Ошибка поиска аудио для '{anime_name}': {e}")
+    except Exception:
+        pass
     return None
 
 # ==========================================
@@ -216,22 +153,47 @@ def load_popular_anime():
 # 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
 # ==========================================
 
-def generate_strict_quiz(anime_name, token, target_media):
+def generate_strict_quiz(anime_name, target_media):
     question_templates = [
         {
-            "type": "плохое описание сюжета",
+            "type": "история браузера",
             "media_type": "text",
-            "prompt": f"Опиши сюжет аниме «{anime_name}» смешно и абсурдно. НЕ используй имена героев. Начни с 'В каком аниме...?'"
+            "prompt": f"Придумай 3 смешных поисковых запроса в браузере, которые мог бы вбивать герой аниме «{anime_name}». Категорически без имен. В конце предложи угадать, чей это браузер."
+        },
+        {
+            "type": "заметки психотерапевта",
+            "media_type": "text",
+            "prompt": f"Напиши короткую заметку от лица психотерапевта, к которому пришел герой аниме «{anime_name}». Врач в шоке от проблем пациента (без имен). В конце попроси угадать тайтл."
+        },
+        {
+            "type": "полицейская сводка",
+            "media_type": "text",
+            "prompt": f"Составь смешную полицейскую сводку о разрушениях после типичной драки в аниме «{anime_name}». Опиши способности языка бюрократа (без имен). Закончи вопросом о том, где это произошло."
+        },
+        {
+            "type": "отзыв хейтера",
+            "media_type": "text",
+            "prompt": f"Напиши утрированно 'гневный' и смешной отзыв зрителя на логику мира аниме «{anime_name}» (без имен). Закончи текстом вопросом к читателям, чтобы они угадали тайтл."
+        },
+        {
+            "type": "глазами прохожего (POV)",
+            "media_type": "text",
+            "prompt": f"Опиши безумную сцену из аниме «{anime_name}» от лица случайного прохожего, который ничего не понимает. Имена не называй. В конце спроси, из какого это аниме."
         },
         {
             "type": "ребус из эмодзи",
             "media_type": "text",
-            "prompt": f"Подбери 4-5 эмодзи, которые идеально описывают сюжет аниме «{anime_name}». Формат вывода: '[Эмодзи] Какое аниме зашифровано в этом послании?'"
+            "prompt": f"Подбери 4-5 эмодзи, которые идеально описывают сюжет аниме «{anime_name}». Выведи эмодзи и задай вопрос 'Какое аниме здесь скрыто?'."
         },
         {
             "type": "три ассоциации",
             "media_type": "text",
-            "prompt": f"Выбери 3 уникальных слова-ассоциации (предметы, термины — НЕ имена), которые указывают на аниме «{anime_name}». Формат: 'Три слова: [Слово 1], [Слово 2], [Слово 3]. О каком аниме речь?'"
+            "prompt": f"Выбери 3 уникальных предмета, термина или особенности лора (НЕ имена) из аниме «{anime_name}». Перечисли их и спроси 'Для какого мира характерны эти вещи?'"
+        },
+        {
+            "type": "анкета знакомств",
+            "media_type": "text",
+            "prompt": f"Напиши абсурдную анкету для сайта знакомств от лица персонажа из аниме «{anime_name}». Перечисли его пугающие 'плюсы' и 'минусы' (без имен). Закончи вопросом, откуда этот герой."
         }
     ]
 
@@ -261,7 +223,11 @@ def generate_strict_quiz(anime_name, token, target_media):
         save_last_value(LAST_QUIZ_TYPE_FILE, "угадай опенинг")
         return question, media_url
         
-    else: # Текст
+    else: # Текст (Gemini)
+        if not GEMINI_API_KEY:
+            print("[ERROR] Ключ Gemini API не найден!")
+            return None, None
+            
         last_type = load_last_value(LAST_QUIZ_TYPE_FILE)
         available = [t for t in question_templates if t["type"] != last_type]
         if not available:
@@ -270,7 +236,7 @@ def generate_strict_quiz(anime_name, token, target_media):
         template = random.choice(available)
         
         for attempt in range(3):
-            raw_question = giga_request(template["prompt"], token, max_tokens=250)
+            raw_question = gemini_request(template["prompt"])
             question = clean_question(raw_question)
             
             if question and not is_answer_in_question(question, anime_name):
@@ -331,11 +297,6 @@ def main():
         print("[ERROR] Недостаточно названий в файле popular_anime.txt (нужно минимум 4)")
         return
 
-    token = get_gigachat_token()
-    if not token:
-        print("[ERROR] Не удалось получить токен GigaChat")
-        return
-
     # Читаем прошлый формат и определяем следующий
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     print(f"[DEBUG] Прошлый формат из файла: '{last_media}'")
@@ -351,7 +312,7 @@ def main():
         if len(wrong_pool) < 3: continue
         wrong_answers = random.sample(wrong_pool, 3)
 
-        question, media_url = generate_strict_quiz(correct_anime, token, target_media)
+        question, media_url = generate_strict_quiz(correct_anime, target_media)
         
         if question:
             quiz_data = (correct_anime, wrong_answers, question, media_url)
