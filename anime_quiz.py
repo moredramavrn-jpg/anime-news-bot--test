@@ -63,7 +63,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/4.0"
+        "User-Agent": "AnimeQuizBot/4.1"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -123,9 +123,6 @@ def is_answer_in_question(question, anime_name):
 # ==========================================
 
 def get_shikimori_info(anime_name):
-    """
-    Ищет аниме на Shikimori. Возвращает: (ID_аниме, Ромадзи_название)
-    """
     try:
         headers = {"User-Agent": "AnimeQuizBot"}
         search_url = f"https://shikimori.one/api/animes?search={anime_name}&limit=1"
@@ -138,7 +135,6 @@ def get_shikimori_info(anime_name):
     return None, None
 
 def fetch_anime_image(anime_name):
-    """Ищет реальный кадр (скриншот) из самого аниме (без логотипов и названий)"""
     anime_id, _ = get_shikimori_info(anime_name)
     if not anime_id:
         return None
@@ -156,7 +152,6 @@ def fetch_anime_image(anime_name):
     return None
 
 def fetch_anime_opening(anime_name):
-    """Ищет видео опенинга, используя Ромадзи-название"""
     _, romaji_name = get_shikimori_info(anime_name)
     search_query = romaji_name if romaji_name else anime_name
     
@@ -283,12 +278,17 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         full_question = full_question[:297] + "..."
 
     try:
+        # Скачиваем медиа в память перед отправкой
         if media_type == "image" and media_url:
-            bot.send_photo(chat_id=CHANNEL_ID, photo=media_url)
+            print("Скачиваю картинку...")
+            img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=15).content
+            bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
             time.sleep(1) 
         
         elif media_type == "video" and media_url:
-            bot.send_video(chat_id=CHANNEL_ID, video=media_url, supports_streaming=True)
+            print("Скачиваю видео опенинга...")
+            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
+            bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
             time.sleep(1)
 
         bot.send_poll(
