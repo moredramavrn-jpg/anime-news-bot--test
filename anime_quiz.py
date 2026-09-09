@@ -65,7 +65,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/10.0"
+        "User-Agent": "AnimeQuizBot/10.1"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -205,7 +205,7 @@ def format_display_name(name):
 # 4. ГЕНЕРАЦИЯ ВОПРОСОВ
 # ==========================================
 
-def generate_strict_quiz(search_name, display_name, token, target_media, anime_id=None, char_name=None, char_img=None, romaji_name=None):
+def generate_strict_quiz(search_name, display_name, token, target_media, anime_id=None, char_img=None, romaji_name=None):
     if target_media == "image":
         url = fetch_anime_image(anime_id)
         if not url: return None, None
@@ -228,22 +228,7 @@ def generate_strict_quiz(search_name, display_name, token, target_media, anime_i
         save_last_value(LAST_QUIZ_TYPE_FILE, "угадай персонажа по фото")
         return random.choice(["Узнаете это лицо? Как зовут персонажа?", "Проверим память на лица! Кто изображен на арте?", "Один взгляд — и всё ясно. Кто это?"]), char_img
 
-    elif target_media == "text_char":
-        templates = [
-            {"type": "дневник персонажа", "prompt": f"Напиши ОЧЕНЬ КОРОТКУЮ запись из дневника, которую мог бы написать {char_name} из аниме «{display_name}». Разрешено упоминать название аниме, но КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО называть имя персонажа. СТРОГО до 200 символов."},
-            {"type": "резюме персонажа", "prompt": f"Составь смешное резюме на работу от лица {char_name} из аниме «{display_name}». Укажи его навыки. Можно назвать аниме, но ИМЯ ГЕРОЯ писать ЗАПРЕЩЕНО. СТРОГО до 200 символов."},
-            {"type": "отзыв на персонажа", "prompt": f"Напиши смешной отзыв от другого героя на персонажа {char_name} из аниме «{display_name}». Назови аниме, но ИМЯ ПЕРСОНАЖА ПИСАТЬ СТРОГО ЗАПРЕЩЕНО. СТРОГО до 200 символов."}
-        ]
-        template = random.choice(templates)
-        for _ in range(3):
-            q = clean_question(giga_request(template["prompt"], token, max_tokens=250))
-            if q and not is_answer_in_question(q, char_name):
-                save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
-                return q, None
-            time.sleep(3)
-        return None, None
-
-    else: # target_media == "text" (Аниме)
+    else: 
         templates = [
             {"type": "история браузера", "prompt": f"Придумай 3 ОЧЕНЬ КОРОТКИХ смешных запроса в браузере героя аниме «{display_name}». Без имен. Предложи угадать тайтл. До 200 символов."},
             {"type": "заметки психотерапевта", "prompt": f"Напиши заметку психотерапевта, к которому пришел герой аниме «{display_name}». Без имен. Попроси угадать тайтл. До 200 символов."},
@@ -312,13 +297,12 @@ def main():
 
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     
-    # 6 форматов по кругу!
+    # 5 форматов по кругу (без text_char)
     sequence = {
         "text": "image", 
         "image": "audio", 
         "audio": "video", 
-        "video": "text_char", 
-        "text_char": "image_char", 
+        "video": "image_char", 
         "image_char": "text"
     }
     target_media = sequence.get(last_media, "text")
@@ -331,7 +315,6 @@ def main():
         anime_id, romaji_name = get_shikimori_info(correct_anime)
         if not anime_id: continue
         
-        # Находим 3 неверных франшизы
         wrong_anime_list = []
         shuffled = all_anime.copy(); random.shuffle(shuffled)
         for a in shuffled:
@@ -341,17 +324,15 @@ def main():
             if len(wrong_anime_list) == 3: break
         if len(wrong_anime_list) < 3: continue
 
-        # Ветвление: ПЕРСОНАЖ или АНИМЕ
-        if target_media in ["text_char", "image_char"]:
+        if target_media == "image_char":
             chars = get_anime_characters(anime_id)
             if not chars: continue
             
-            # Берем из первой 15-ки героев (чтобы не загадывать массовку)
             correct_char = random.choice(chars[:15])
             char_name = correct_char.get('russian') or correct_char.get('name')
             char_img = "https://shikimori.one" + correct_char['image']['original'] if correct_char.get('image') else None
             
-            if target_media == "image_char" and (not char_img or 'missing' in char_img): continue
+            if not char_img or 'missing' in char_img: continue
 
             wrong_chars = []
             for wa in wrong_anime_list:
@@ -364,7 +345,7 @@ def main():
 
             display_correct = char_name
             display_wrongs = wrong_chars
-            question, media_url = generate_strict_quiz(correct_anime, display_correct_anime, token, target_media, anime_id, char_name, char_img, romaji_name)
+            question, media_url = generate_strict_quiz(correct_anime, display_correct_anime, token, target_media, anime_id, char_img=char_img, romaji_name=romaji_name)
 
         else:
             display_correct = display_correct_anime
