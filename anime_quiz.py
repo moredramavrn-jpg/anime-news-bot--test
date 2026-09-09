@@ -70,7 +70,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.6"
+        "User-Agent": "AnimeQuizBot/9.7"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -114,7 +114,8 @@ def clean_question(text):
     text = re.sub(r'Ответ сгенерирован нейросетевой моделью.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     if lines:
-        question = lines[0]
+        # ИСПРАВЛЕНИЕ ТУТ: склеиваем все строчки через пробел, чтобы не терять вопрос!
+        question = " ".join(lines)
         question = re.sub(r'\.{3,}$', '', question).strip()
         return question
     return ""
@@ -233,17 +234,9 @@ def are_same_franchise(name1, name2):
 def format_display_name(name):
     """Очищает название для красивого показа в опросе (оставляет Re:Zero целым)."""
     base = name
-    
-    # Режем по двоеточию С ПРОБЕЛОМ. В "Re:Zero" пробела нет, поэтому оно уцелеет!
-    # "Re:Zero. Жизнь с нуля..." отрежется по точке с пробелом до "Re:Zero"
     base = re.split(r':\s+| - | — |\.\s+', base)[0]
-    
-    # Убираем года в скобках
     base = re.sub(r'\s*\(\d{4}\)', '', base)
-    
-    # Убираем технические слова
     base = re.sub(r'\s+(Фильм|Сезон|Часть|OVA|ONA|Movie|TV|фильм|сезон|часть).*', '', base)
-    
     return base.strip()
 
 # ==========================================
@@ -332,7 +325,6 @@ def generate_strict_quiz(search_name, display_name, token, target_media):
             raw_question = giga_request(template["prompt"], token, max_tokens=250)
             question = clean_question(raw_question)
             
-            # Двойная проверка на спойлеры: и по полному имени, и по короткому
             if question and not (is_answer_in_question(question, display_name) or is_answer_in_question(question, search_name)):
                 save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
                 return question, None
@@ -405,11 +397,9 @@ def main():
 
     quiz_data = None
     for attempt in range(10):
-        # 1. Выбираем правильный ответ (Оригинальное имя для поиска картинок/аудио)
         correct_anime = random.choice(all_anime)
-        display_correct = format_display_name(correct_anime) # Красивое имя для показа
+        display_correct = format_display_name(correct_anime)
         
-        # 2. Собираем УНИКАЛЬНЫЕ неправильные ответы
         wrong_answers = []
         shuffled_pool = all_anime.copy()
         random.shuffle(shuffled_pool)
@@ -433,10 +423,8 @@ def main():
         if len(wrong_answers) < 3: 
             continue
 
-        # Форматируем неправильные ответы для показа
         display_wrongs = [format_display_name(w) for w in wrong_answers]
 
-        # 3. Генерируем вопрос (передаем оба имени)
         question, media_url = generate_strict_quiz(correct_anime, display_correct, token, target_media)
         
         if question:
