@@ -42,20 +42,27 @@ def get_gigachat_token():
         "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
     }
     data = {"scope": "GIGACHAT_API_PERS"}
-    try:
-        r = requests.post(url, headers=headers, data=data, timeout=15, verify=False)
-        r.raise_for_status()
-        token_data = r.json()
-        gigachat_access_token = token_data.get("access_token")
-        expires_at = token_data.get("expires_at")
-        if expires_at:
-            gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
-        else:
-            gigachat_token_expires_at = time.time() + 1800
-        return gigachat_access_token
-    except Exception as e:
-        print(f"Ошибка получения токена GigaChat: {e}")
-        return None
+    
+    # Делаем до 3-х попыток получить токен
+    for attempt in range(3):
+        try:
+            # Увеличили timeout до 30 секунд
+            r = requests.post(url, headers=headers, data=data, timeout=30, verify=False)
+            r.raise_for_status()
+            token_data = r.json()
+            gigachat_access_token = token_data.get("access_token")
+            expires_at = token_data.get("expires_at")
+            if expires_at:
+                gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+            else:
+                gigachat_token_expires_at = time.time() + 1800
+            return gigachat_access_token
+        except Exception as e:
+            print(f"Попытка {attempt + 1}: Ошибка получения токена GigaChat: {e}")
+            time.sleep(3) # Ждем 3 секунды перед повторной попыткой
+            
+    print("Не удалось получить токен после 3 попыток.")
+    return None
 
 def giga_request(prompt, token, max_tokens=300):
     headers = {
@@ -63,7 +70,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/4.1"
+        "User-Agent": "AnimeQuizBot/4.2"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -82,19 +89,23 @@ def giga_request(prompt, token, max_tokens=300):
         "temperature": 0.8,
         "max_tokens": max_tokens
     }
-    try:
-        response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30,
-            verify=False
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"Ошибка GigaChat: {e}")
-        return ""
+    
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                "https://api.giga.chat/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30, # Также увеличили таймаут для генерации текста
+                verify=False
+            )
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"Попытка {attempt + 1}: Ошибка GigaChat (генерация): {e}")
+            time.sleep(3)
+            
+    return ""
 
 def clean_question(text):
     if not text:
@@ -126,7 +137,7 @@ def get_shikimori_info(anime_name):
     try:
         headers = {"User-Agent": "AnimeQuizBot"}
         search_url = f"https://shikimori.one/api/animes?search={anime_name}&limit=1"
-        res = requests.get(search_url, headers=headers, timeout=10).json()
+        res = requests.get(search_url, headers=headers, timeout=15).json()
         
         if res and isinstance(res, list) and len(res) > 0:
             return res[0]['id'], res[0]['name']
@@ -142,7 +153,7 @@ def fetch_anime_image(anime_name):
     try:
         headers = {"User-Agent": "AnimeQuizBot"}
         url = f"https://shikimori.one/api/animes/{anime_id}/screenshots"
-        res = requests.get(url, headers=headers, timeout=10).json()
+        res = requests.get(url, headers=headers, timeout=15).json()
         
         if res and isinstance(res, list) and len(res) > 0:
             pic = random.choice(res)
@@ -157,7 +168,7 @@ def fetch_anime_opening(anime_name):
     
     try:
         url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos"
-        res = requests.get(url, timeout=15).json()
+        res = requests.get(url, timeout=20).json()
         
         if not res.get('anime'):
             return None
@@ -278,16 +289,15 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         full_question = full_question[:297] + "..."
 
     try:
-        # Скачиваем медиа в память перед отправкой
         if media_type == "image" and media_url:
             print("Скачиваю картинку...")
-            img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=15).content
+            img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=20).content
             bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
             time.sleep(1) 
         
         elif media_type == "video" and media_url:
             print("Скачиваю видео опенинга...")
-            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
+            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=40).content
             bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
             time.sleep(1)
 
