@@ -2,24 +2,18 @@ import os
 import re
 import random
 import time
+import uuid
 import io
 import urllib3
 import telebot
 import requests
-from google import genai
-from google.genai import types
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Токены и ID
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Настройка клиента Gemini
-client = None
-if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
 # === ЖЕСТКАЯ ПРИВЯЗКА ПУТЕЙ К ПАПКЕ СКРИПТА ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,41 +24,99 @@ LAST_MEDIA_TYPE_FILE = os.path.join(BASE_DIR, "last_media_type.txt")
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
+gigachat_access_token = None
+gigachat_token_expires_at = 0
+
 # ==========================================
-# 1. РАБОТА С GEMINI (ТЕКСТОВЫЕ ВОПРОСЫ)
+# 1. РАБОТА С GIGACHAT
 # ==========================================
 
-def gemini_request(prompt):
-    if not client:
-        print("[ERROR] Клиент Gemini не инициализирован. Проверьте GEMINI_API_KEY.")
-        return ""
-        
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=(
+def get_gigachat_token():
+    global gigachat_access_token, gigachat_token_expires_at
+
+    if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
+        return gigachat_access_token
+
+    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        "RqUID": str(uuid.uuid4()),
+        "Authorization": f"Basic {GIGACHAT_AUTHORIZATION_KEY}"
+    }
+    data = {"scope": "GIGACHAT_API_PERS"}
+    
+    for attempt in range(3):
+        try:
+            r = requests.post(url, headers=headers, data=data, timeout=30, verify=False)
+            r.raise_for_status()
+            token_data = r.json()
+            gigachat_access_token = token_data.get("access_token")
+            expires_at = token_data.get("expires_at")
+            if expires_at:
+                gigachat_token_expires_at = expires_at / 1000 if expires_at > 10**12 else expires_at
+            else:
+                gigachat_token_expires_at = time.time() + 1800
+            return gigachat_access_token
+        except Exception as e:
+            print(f"Попытка {attempt + 1}: Ошибка получения токена GigaChat: {e}")
+            time.sleep(3)
+            
+    return None
+
+def giga_request(prompt, token, max_tokens=300):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Request-ID": str(uuid.uuid4()),
+        "X-Session-ID": str(uuid.uuid4()),
+        "User-Agent": "AnimeQuizBot/9.2"
+    }
+    payload = {
+        "model": "GigaChat-3-Ultra",
+        "messages": [
+            {
+                "role": "system", 
+                "content": (
                     "Ты — харизматичный ведущий викторины по аниме. "
-                    "Генерируй ровно один короткий креативный вопрос без вводных слов (таких как 'Конечно, вот вопрос:' и т.д.). "
+                    "Генерируй ровно один короткий вопрос без вводных слов. "
                     "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
-                    "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме или имена главных героев в тексте своего вопроса! "
-                    "Пиши так, чтобы было интересно угадывать."
+                    "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме в тексте своего вопроса!"
                 )
+            },
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.8,
+        "max_tokens": max_tokens
+    }
+    
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                "https://api.giga.chat/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
+                verify=False
             )
-        )
-        return response.text.strip()
-    except Exception as e:
-        print(f"[ERROR] Ошибка генерации Gemini: {e}")
-        return ""
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"Попытка {attempt + 1}: Ошибка GigaChat (генерация): {e}")
+            time.sleep(3)
+            
+    return ""
 
 def clean_question(text):
     if not text:
         return ""
-    text = text.replace('**', '').replace('*', '')
+    text = re.sub(r'Как и любая языковая модель.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'Ответ сгенерирован нейросетевой моделью.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     if lines:
-        return " ".join(lines)
+        question = lines[0]
+        question = re.sub(r'\.{3,}$', '', question).strip()
+        return question
     return ""
 
 def is_answer_in_question(question, anime_name):
@@ -94,7 +146,8 @@ def get_shikimori_info(anime_name):
 
 def fetch_anime_image(anime_name):
     anime_id, _ = get_shikimori_info(anime_name)
-    if not anime_id: return None
+    if not anime_id:
+        return None
         
     try:
         headers = {"User-Agent": "AnimeQuizBot"}
@@ -116,7 +169,8 @@ def fetch_anime_audio(anime_name):
         url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos.audio"
         res = requests.get(url, timeout=20).json()
         
-        if not res.get('anime'): return None
+        if not res.get('anime'):
+            return None
             
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
@@ -133,7 +187,7 @@ def fetch_anime_audio(anime_name):
     return None
 
 # ==========================================
-# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ
+# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ (С ЛОГИРОВАНИЕМ)
 # ==========================================
 
 def load_last_value(filename):
@@ -160,7 +214,7 @@ def load_popular_anime():
 # 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
 # ==========================================
 
-def generate_strict_quiz(anime_name, target_media):
+def generate_strict_quiz(anime_name, token, target_media):
     question_templates = [
         {
             "type": "история браузера",
@@ -230,11 +284,7 @@ def generate_strict_quiz(anime_name, target_media):
         save_last_value(LAST_QUIZ_TYPE_FILE, "угадай опенинг")
         return question, media_url
         
-    else: # Текст (Gemini)
-        if not client:
-            print("[ERROR] Ключ Gemini API не найден!")
-            return None, None
-            
+    else: # Текст
         last_type = load_last_value(LAST_QUIZ_TYPE_FILE)
         available = [t for t in question_templates if t["type"] != last_type]
         if not available:
@@ -243,7 +293,7 @@ def generate_strict_quiz(anime_name, target_media):
         template = random.choice(available)
         
         for attempt in range(3):
-            raw_question = gemini_request(template["prompt"])
+            raw_question = giga_request(template["prompt"], token, max_tokens=250)
             question = clean_question(raw_question)
             
             if question and not is_answer_in_question(question, anime_name):
@@ -304,6 +354,11 @@ def main():
         print("[ERROR] Недостаточно названий в файле popular_anime.txt (нужно минимум 4)")
         return
 
+    token = get_gigachat_token()
+    if not token:
+        print("[ERROR] Не удалось получить токен GigaChat")
+        return
+
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     print(f"[DEBUG] Прошлый формат из файла: '{last_media}'")
     
@@ -318,7 +373,7 @@ def main():
         if len(wrong_pool) < 3: continue
         wrong_answers = random.sample(wrong_pool, 3)
 
-        question, media_url = generate_strict_quiz(correct_anime, target_media)
+        question, media_url = generate_strict_quiz(correct_anime, token, target_media)
         
         if question:
             quiz_data = (correct_anime, wrong_answers, question, media_url)
