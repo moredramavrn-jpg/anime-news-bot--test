@@ -43,6 +43,15 @@ def telegram_len(s):
         return 0
     return len(s.encode('utf-16-le')) // 2
 
+# ---------- Разбиение на предложения (с защитой от аббревиатур типа P.A. Works) ----------
+def split_sentences(text):
+    """Разбивает текст на предложения по .!? , но не разрывает распространённые
+    аббревиатуры и обозначения вида 'P.A. Works', 'U.S.A.', 'Vol.1' и т.п.,
+    где точка стоит после одной заглавной латинской/кириллической буквы."""
+    if not text:
+        return []
+    return re.split(r'(?<![A-ZА-Я]\.)(?<=[.!?])\s+', text)
+
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
     return re.sub(r'[^\w]', '', title.lower())
@@ -273,38 +282,30 @@ def collapse_repeated_phrases(text, max_words=8):
     """
     if not text:
         return text
-    
-    # Сначала убираем простое дублирование слов подряд
-    # Например: "Наруто Наруто" -> "Наруто"
+
     words = text.split()
     result = []
     i = 0
     while i < len(words):
-        # Проверяем дублирование одного слова
         if i + 1 < len(words) and words[i].lower() == words[i + 1].lower():
-            # Убираем дублирование специальных слов (имена, названия)
-            # Проверяем, что это не часть нормальной фразы (например, "то то")
             if words[i].lower() not in ['то', 'на', 'по', 'за', 'из', 'от']:
                 result.append(words[i])
                 i += 2
                 continue
         result.append(words[i])
         i += 1
-    
-    # Теперь проверяем дублирование фраз (2-8 слов)
+
     text = ' '.join(result)
     words = text.split()
     result = []
     i = 0
     n_words = len(words)
-    
+
     while i < n_words:
         matched = False
-        # Пробуем найти повтор фразы
         for n in range(min(max_words, (n_words - i) // 2), 1, -1):
             first = [w.lower().strip('«»"\'.,;:!?') for w in words[i:i + n]]
             second = [w.lower().strip('«»"\'.,;:!?') for w in words[i + n:i + 2 * n]]
-            # Проверяем совпадение (игнорируем регистр и знаки препинания)
             if first == second and any(first) and len(' '.join(first)) > 2:
                 result.extend(words[i:i + n])
                 i += 2 * n
@@ -313,7 +314,7 @@ def collapse_repeated_phrases(text, max_words=8):
         if not matched:
             result.append(words[i])
             i += 1
-    
+
     return ' '.join(result)
 
 def clean_shikimori_links(text):
@@ -324,57 +325,68 @@ def clean_shikimori_links(text):
     """
     if not text:
         return text
-    
-    # Убираем дубли в кавычках: «NarutoНаруто» -> «Наруто»
-    # Ищем паттерн: «[англ. название][рус. название]» и оставляем только русское
+
     pattern = r'«([A-Za-z0-9\s]+)([А-Яа-я\s]+)»'
     text = re.sub(pattern, r'«\2»', text)
-    
-    # Тоже самое без кавычек: NarutoНаруто -> Наруто
-    # Проверяем, что вторая часть — это русское название
+
     def replace_en_ru(match):
         en_part = match.group(1).strip()
         ru_part = match.group(2).strip()
-        # Если русская часть больше 2 символов и это похоже на имя/название
         if len(ru_part) > 2 and re.search(r'[А-Я]', ru_part):
             return ru_part
         return match.group(0)
-    
-    # Сначала ищем английское слово за которым сразу идёт русское
-    # Например: "Hayato DateХаято Датэ" -> "Хаято Датэ"
+
     pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)([А-Я][а-я]+(?:\s+[А-Я][а-я]+)*)'
     text = re.sub(pattern, replace_en_ru, text)
-    
-    # Убираем дубли имён: "Хаято Датэ Хаято Датэ" -> "Хаято Датэ"
+
     pattern = r'([А-Я][а-я]+\s+[А-Я][а-я]+)\s+\1'
     text = re.sub(pattern, r'\1', text)
-    
-    # Убираем дубли названий: "Наруто Наруто" -> "Наруто"
+
     pattern = r'([А-Я][а-я]+)\s+\1(?=\s|$|[,.:;!?])'
     text = re.sub(pattern, r'\1', text)
-    
+
+    return text
+
+def strip_romaji_title(text):
+    """
+    Если текст содержит длинное название на латинице/ромадзи, за которым сразу
+    в скобках идёт русский перевод — оставляет только русский перевод, без
+    оригинального нечитаемого названия. Например:
+    «Ore wa Buki dake ja Naku...» (Изгнанный читер-чародей...) -> «Изгнанный читер-чародей...»
+    """
+    if not text:
+        return text
+
+    pattern = re.compile(
+        r'«?[A-Za-z][A-Za-z0-9 ,\'\-«»?!]{8,}»\s*\(\s*([^()]*[А-Яа-я][^()]*)\)'
+    )
+
+    def repl(m):
+        ru = m.group(1).strip()
+        if not (ru.startswith('«') and ru.endswith('»')):
+            ru = f'«{ru}»'
+        return ru
+
+    text = pattern.sub(repl, text)
     return text
 
 def clean_duplicate_title(title):
     """Убирает дублирование в заголовке"""
     if not title:
         return title
-    
-    # Убираем дубли: «NarutoНаруто» -> «Наруто»
+
     title = re.sub(r'«([A-Za-z0-9\s]+)([А-Яа-я\s]+)»', r'«\2»', title)
-    
-    # Убираем дубли имён в заголовке
+
     title = re.sub(r'([А-Я][а-я]+\s+[А-Я][а-я]+)\s+\1', r'\1', title)
     title = re.sub(r'([А-Я][а-я]+)\s+\1(?=\s|$|[,.:;!?])', r'\1', title)
-    
-    # Убираем повтор одинаковых слов подряд
+
     words = title.split()
     result = []
     for w in words:
         if result and w.lower() == result[-1].lower():
             continue
         result.append(w)
-    
+
     return ' '.join(result)
 
 def fetch_full_text(entry):
@@ -389,6 +401,7 @@ def fetch_full_text(entry):
                 if full_text:
                     full_text = collapse_repeated_phrases(full_text)
                     full_text = clean_shikimori_links(full_text)
+                    full_text = strip_romaji_title(full_text)
                     full_text = re.sub(r'^([^.!?]+)\s+\1\s*', r'\1 ', full_text, flags=re.IGNORECASE)
                     return full_text
         summary = entry.get('summary', '') or entry.get('description', '')
@@ -403,6 +416,7 @@ def fetch_full_text(entry):
             if full_text:
                 full_text = collapse_repeated_phrases(full_text)
                 full_text = clean_shikimori_links(full_text)
+                full_text = strip_romaji_title(full_text)
                 return full_text
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
@@ -602,7 +616,7 @@ def download_image(url, referer=None):
 def simple_truncate_by_sentences(text, max_len):
     if telegram_len(text) <= max_len:
         return text
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = split_sentences(text)
     result = ""
     for s in sentences:
         if telegram_len(result) + telegram_len(s) + 1 > max_len:
@@ -629,7 +643,7 @@ def truncate_by_words(text, max_len):
 def truncate_to_full_sentences(text, max_len):
     if telegram_len(text) <= max_len:
         return text
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = split_sentences(text)
     result = []
     current_len = 0
     for s in sentences:
@@ -689,7 +703,7 @@ def clean_and_paragraph(text):
         return ""
     text = re.sub(r'\s*\n\s*', ' ', text)
     text = re.sub(r' {2,}', ' ', text).strip()
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = split_sentences(text)
     if len(sentences) <= 1:
         return text
     paragraphs = []
@@ -777,7 +791,7 @@ def remove_duplicate_start(title, body):
         body_clean = body_clean[len(title_clean):].lstrip('.,;:!? ')
         if not body_clean:
             return ""
-    sentences = re.split(r'(?<=[.!?])\s+', body_clean)
+    sentences = split_sentences(body_clean)
     if sentences and title_clean.lower() in sentences[0].lower():
         body_clean = ' '.join(sentences[1:]).strip()
     return body_clean
@@ -815,11 +829,21 @@ def rewrite_news(title, body, target_len=None):
 
 {length_instruction}
 
+НАЗВАНИЯ АНИМЕ И ПЕРСОНАЖЕЙ — ТОЛЬКО НА РУССКОМ:
+- Если в исходном тексте название сначала даётся на японском/английском/ромадзи, а затем в скобках приведён
+  русский перевод — используй ТОЛЬКО русский перевод, и в заголовке, и в тексте.
+- НИКОГДА не пиши оригинальное название на латинице или ромадзи (например, "Tsuihou sareta Cheat Fuyo
+  Majutsushi") — ни в кавычках, ни в скобках, ни отдельно. Это делает пост нечитаемым для русскоязычной аудитории.
+- Если у тайтла нет очевидного русского перевода в источнике — оставь только его устоявшееся русское или
+  адаптированное название, но не приводи оригинал на латинице.
+- Названия студий и англоязычные имена собственные (например, P.A. Works, Kadokawa), которые обычно не
+  переводятся, оставляй как есть — они не относятся к названиям тайтлов и запрет их не касается.
+
 СТИЛЬ — ПИШИ КАК ЖИВОЙ ЧЕЛОВЕК:
 - Пиши так, как обычный человек рассказывает интересную новость другу: простыми, естественными фразами.
 - Варьируй начала предложений и абзацев — не начинай два абзаца подряд одинаковой конструкцией.
 - Используй разную длину предложений: где-то короткое и хлёсткое, где-то развёрнутое.
-- Сохраняй все факты, имена, названия, даты и цифры ТОЧНО как в оригинале — здесь нельзя ошибаться.
+- Сохраняй все факты, даты и цифры ТОЧНО как в оригинале — здесь нельзя ошибаться.
 - Используй кавычки «» для названий и цитат.
 - Разбивай текст на абзацы по 2 предложения (если это не нарушает смысл).
 
@@ -833,7 +857,7 @@ def rewrite_news(title, body, target_len=None):
 - Собственное мнение, оценки, домыслы, предположения, которых нет в оригинале.
 - Штампованные метафоры и клише («настоящий подарок для фанатов», «не оставит равнодушным»).
 
-Заголовок должен быть конкретным и по существу, без кликбейта и без придуманных деталей.
+Заголовок должен быть конкретным и по существу, без кликбейта и без придуманных деталей, только на русском.
 
 Заголовок: {title}
 
@@ -856,7 +880,7 @@ def rewrite_news(title, body, target_len=None):
             json={
                 "model": "GigaChat-3-Ultra",
                 "messages": [
-                    {"role": "system", "content": "Ты — опытный редактор аниме-новостей, который пишет живым человеческим языком, а не канцеляритом. Ты всегда укладываешься в заданную длину текста и всегда доводишь мысль до конца, не обрывая текст на полуслове."},
+                    {"role": "system", "content": "Ты — опытный редактор аниме-новостей, который пишет живым человеческим языком, а не канцеляритом, и всегда пишет названия тайтлов только по-русски, без оригинала на латинице/ромадзи. Ты всегда укладываешься в заданную длину текста и всегда доводишь мысль до конца, не обрывая текст на полуслове."},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.6,
@@ -880,10 +904,12 @@ def rewrite_news(title, body, target_len=None):
 
         new_title = fix_quotes(new_title)
         new_title = fix_punctuation_spaces(new_title)
+        new_title = strip_romaji_title(new_title)
         new_body = clean_and_paragraph(new_body)
         new_body = fix_quotes(new_body)
         new_body = fix_punctuation_spaces(new_body)
         new_body = remove_garbage_lines(new_body)
+        new_body = strip_romaji_title(new_body)
 
         new_body = remove_duplicate_start(new_title, new_body)
 
@@ -946,10 +972,12 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
-    # Чистим заголовок от дублей
+    # Чистим заголовок и текст от дублей и оригинальных ромадзи-названий
     title = clean_duplicate_title(title)
+    title = strip_romaji_title(title)
     body = clean_shikimori_links(body)
-    
+    body = strip_romaji_title(body)
+
     if video_url and is_youtube:
         emoji = '🎬'
     elif video_url and not is_youtube:
@@ -967,6 +995,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     print(f"[DEBUG] Текст ДО рерайта: {telegram_len(body)} символов, целевая длина: {target_len}")
     title, body = rewrite_news(title, body, target_len=target_len)
     print(f"[DEBUG] Текст ПОСЛЕ рерайта: {telegram_len(body)} символов")
+
+    # Safety net: если GigaChat недоступен/выключен, всё равно чистим ромадзи в оригинале
+    title = strip_romaji_title(title)
+    body = strip_romaji_title(body)
 
     full_message_long = build_post_html(title, body, emoji)
     caption_message = None
@@ -988,6 +1020,8 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
 
     if video_url and is_youtube:
+        # Видео не скачиваем — сразу отправляем текстом со ссылкой на YouTube.
+        # Telegram сам подтянет превью с плеером по ссылке.
         short_url = to_short_youtube_url(video_url)
         message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
         bot.send_message(
@@ -1077,7 +1111,8 @@ def main():
         if full_text:
             full_text = collapse_repeated_phrases(full_text)
             full_text = clean_shikimori_links(full_text)
-            sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
+            full_text = strip_romaji_title(full_text)
+            sentences = split_sentences(full_text.strip())
             if sentences:
                 title = normalize_whitespace(sentences[0])
                 full_text = ' '.join(sentences[1:])
