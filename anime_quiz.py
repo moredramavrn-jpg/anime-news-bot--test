@@ -65,7 +65,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/10.1"
+        "User-Agent": "AnimeQuizBot/10.2"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -297,7 +297,7 @@ def main():
 
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     
-    # 5 форматов по кругу (без text_char)
+    # 5 форматов по кругу
     sequence = {
         "text": "image", 
         "image": "audio", 
