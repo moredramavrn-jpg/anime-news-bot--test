@@ -65,7 +65,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/10.2"
+        "User-Agent": "AnimeQuizBot/10.3"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -334,17 +334,28 @@ def main():
             
             if not char_img or 'missing' in char_img: continue
 
+            # Собираем неверные варианты с добавлением названия аниме
             wrong_chars = []
             for wa in wrong_anime_list:
                 w_id, _ = get_shikimori_info(wa)
                 w_chars = get_anime_characters(w_id)
+                display_wa = format_display_name(wa)
+                
                 if w_chars:
                     wc = random.choice(w_chars[:10])
-                    wrong_chars.append(wc.get('russian') or wc.get('name'))
-                else: wrong_chars.append("Неизвестный Герой")
+                    wc_name = wc.get('russian') or wc.get('name')
+                    opt = f"{wc_name} ({display_wa})"
+                else: 
+                    opt = f"Неизвестный Герой ({display_wa})"
+                
+                # Защита от лимитов Telegram (макс. 100 символов на вариант ответа)
+                wrong_chars.append(opt[:97] + "..." if len(opt) > 100 else opt)
 
-            display_correct = char_name
+            # Форматируем правильный ответ
+            opt_correct = f"{char_name} ({display_correct_anime})"
+            display_correct = opt_correct[:97] + "..." if len(opt_correct) > 100 else opt_correct
             display_wrongs = wrong_chars
+            
             question, media_url = generate_strict_quiz(correct_anime, display_correct_anime, token, target_media, anime_id, char_img=char_img, romaji_name=romaji_name)
 
         else:
