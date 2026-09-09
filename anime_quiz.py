@@ -70,7 +70,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.3"
+        "User-Agent": "AnimeQuizBot/9.5"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -187,7 +187,7 @@ def fetch_anime_audio(anime_name):
     return None
 
 # ==========================================
-# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ (С ЛОГИРОВАНИЕМ)
+# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ И УМНЫЕ ФИЛЬТРЫ
 # ==========================================
 
 def load_last_value(filename):
@@ -209,6 +209,46 @@ def load_popular_anime():
         return []
     with open(POPULAR_ANIME_FILE, 'r', encoding='utf-8') as f:
         return [line.strip() for line in f if line.strip()]
+
+def get_base_name(name):
+    """Вычленяет чистое корневое название франшизы."""
+    base = name.lower()
+    
+    # 1. Спасаем Re:Zero (заменяем на слитное слово временно)
+    base = base.replace('re:zero', 'rezero')
+    
+    # 2. Режем по двоеточию с пробелом, тире, или точке с пробелом
+    base = re.split(r':\s+| - | — |\.\s+', base)[0]
+    
+    # 3. Убираем года в скобках, например (2014)
+    base = re.sub(r'\s*\(\d{4}\)', '', base)
+    
+    # 4. Убираем слова-маркеры (Фильм, сезон, ova)
+    base = re.sub(r'\s+(фильм|сезон|часть|ova|ona|movie|tv).*', '', base)
+    
+    # 5. Убираем цифры на конце (например Наруто 7 -> Наруто)
+    base = re.sub(r'\s+\d+$', '', base)
+    
+    return base.strip()
+
+def are_same_franchise(name1, name2):
+    """Проверяет, относятся ли два тайтла к одной франшизе."""
+    b1 = get_base_name(name1)
+    b2 = get_base_name(name2)
+    
+    if b1 == b2:
+        return True
+        
+    # Проверка на вложенность ("Драконий жемчуг" и "Драконий жемчуг Зет")
+    if len(b1) > 4 and len(b2) > 4:
+        if b1.startswith(b2 + " ") or b2.startswith(b1 + " "):
+            return True
+            
+    # Фикс для ДжоДжо (разные переводы слова "приключение")
+    if "джоджо" in b1 and "джоджо" in b2:
+        return True
+        
+    return False
 
 # ==========================================
 # 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
@@ -284,7 +324,7 @@ def generate_strict_quiz(anime_name, token, target_media):
         save_last_value(LAST_QUIZ_TYPE_FILE, "угадай опенинг")
         return question, media_url
         
-    else: # Текст
+    else: 
         last_type = load_last_value(LAST_QUIZ_TYPE_FILE)
         available = [t for t in question_templates if t["type"] != last_type]
         if not available:
@@ -313,7 +353,6 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
     header = "🎌 Аниме-викторина\n\n"
     full_question = f"{header}{question_text}"
 
-    # Подстраховка: если текст всё равно длинный, обрезаем
     if len(full_question) > 300:
         full_question = full_question[:297] + "..."
 
@@ -369,11 +408,34 @@ def main():
 
     quiz_data = None
     for attempt in range(10):
+        # 1. Выбираем правильный ответ
         correct_anime = random.choice(all_anime)
-        wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
-        if len(wrong_pool) < 3: continue
-        wrong_answers = random.sample(wrong_pool, 3)
+        
+        # 2. Собираем УНИКАЛЬНЫЕ неправильные ответы
+        wrong_answers = []
+        shuffled_pool = all_anime.copy()
+        random.shuffle(shuffled_pool)
+        
+        for a in shuffled_pool:
+            if are_same_franchise(a, correct_anime):
+                continue
+                
+            is_duplicate = False
+            for w in wrong_answers:
+                if are_same_franchise(a, w):
+                    is_duplicate = True
+                    break
+                    
+            if not is_duplicate:
+                wrong_answers.append(a)
+                
+            if len(wrong_answers) == 3:
+                break
+                
+        if len(wrong_answers) < 3: 
+            continue
 
+        # 3. Генерируем вопрос
         question, media_url = generate_strict_quiz(correct_anime, token, target_media)
         
         if question:
