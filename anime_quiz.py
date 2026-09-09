@@ -69,7 +69,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/7.0"
+        "User-Agent": "AnimeQuizBot/8.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -161,12 +161,10 @@ def fetch_anime_image(anime_name):
     return None
 
 def fetch_anime_audio(anime_name):
-    """Ищет только аудиодорожку (.ogg) опенинга через AnimeThemes"""
     _, romaji_name = get_shikimori_info(anime_name)
     search_query = romaji_name if romaji_name else anime_name
     
     try:
-        # Теперь запрашиваем include=audios вместо videos
         url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.audios"
         res = requests.get(url, timeout=20).json()
         
@@ -180,7 +178,6 @@ def fetch_anime_audio(anime_name):
             for entry in op.get('animethemeentries', []):
                 audios = entry.get('audios', [])
                 if audios:
-                    # Возвращаем первую попавшуюся аудиодорожку
                     return audios[0]['link']
                     
         print(f"Для '{anime_name}' не найдено аудио.")
@@ -209,7 +206,7 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 # ==========================================
-# 4. ГЕНЕРАЦИЯ ВОПРОСОВ
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (СТРОГАЯ ОЧЕРЕДЬ)
 # ==========================================
 
 def generate_quiz_content(anime_name, token):
@@ -235,21 +232,29 @@ def generate_quiz_content(anime_name, token):
         },
         {
             "type": "угадай опенинг",
-            "media_type": "audio" # Изменили тип на audio
+            "media_type": "audio"
         }
     ]
 
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
-    available = [t for t in question_templates if t["media_type"] != last_media]
-    if not available:
-        available = question_templates
+    
+    # Строгий порядок: текст -> картинка -> аудио -> текст...
+    sequence = {"text": "image", "image": "audio", "audio": "text"}
+    target_media = sequence.get(last_media, "text")
 
-    random.shuffle(available)
+    # Разделяем шаблоны: сначала пытаемся взять целевой формат
+    target_templates = [t for t in question_templates if t["media_type"] == target_media]
+    fallback_templates = [t for t in question_templates if t["media_type"] != target_media]
+
+    random.shuffle(target_templates)
+    random.shuffle(fallback_templates)
+    
+    # Формируем итоговую очередь попыток (если нужный формат сломается, пойдут запасные)
+    available = target_templates + fallback_templates
     
     for template in available:
         media_url = None
         
-        # 4.1 Картинка
         if template["media_type"] == "image":
             media_url = fetch_anime_image(anime_name)
             if not media_url: continue 
@@ -264,7 +269,6 @@ def generate_quiz_content(anime_name, token):
             save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
             return question, media_url, template["media_type"]
             
-        # 4.2 Аудио
         elif template["media_type"] == "audio":
             media_url = fetch_anime_audio(anime_name)
             if not media_url: continue 
@@ -279,7 +283,6 @@ def generate_quiz_content(anime_name, token):
             save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
             return question, media_url, template["media_type"]
             
-        # 4.3 Текст
         else:
             for attempt in range(3):
                 raw_question = giga_request(template["prompt"], token, max_tokens=250)
@@ -309,24 +312,20 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
     try:
         media_msg = None
         
-        # Скачиваем и отправляем картинку
         if media_type == "image" and media_url:
             print("Скачиваю картинку...")
             img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=20).content
             media_msg = bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
         
-        # Скачиваем и отправляем аудио
         elif media_type == "audio" and media_url:
             print("Скачиваю аудио опенинга...")
             audio_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
             print("Аудио скачано. Отправляю в Telegram...")
             
-            # Заворачиваем байты в виртуальный файл и даем нейтральное имя, чтобы не спойлерить ответ в названии трека
             audio_file = io.BytesIO(audio_data)
             audio_file.name = "opening_track.ogg"
             media_msg = bot.send_audio(chat_id=CHANNEL_ID, audio=audio_file)
 
-        # Отправляем опрос (как ответ на медиа)
         reply_id = media_msg.message_id if media_msg else None
 
         bot.send_poll(
