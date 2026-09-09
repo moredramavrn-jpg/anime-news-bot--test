@@ -17,7 +17,7 @@ GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 # Файлы данных
 POPULAR_ANIME_FILE = "popular_anime.txt"
 LAST_QUIZ_TYPE_FILE = "last_quiz_type.txt"
-LAST_MEDIA_TYPE_FILE = "last_media_type.txt" # Новый файл для чередования визуала
+LAST_MEDIA_TYPE_FILE = "last_media_type.txt"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -63,7 +63,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/3.0"
+        "User-Agent": "AnimeQuizBot/4.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -109,45 +109,59 @@ def clean_question(text):
     return ""
 
 def is_answer_in_question(question, anime_name):
-    """Проверяет, нет ли слов из названия аниме в самом вопросе (защита от спойлеров)"""
     q_words = set(re.findall(r'[а-яёa-z0-9]+', question.lower()))
     a_words = set(re.findall(r'[а-яёa-z0-9]+', anime_name.lower()))
     
-    # Исключаем короткие предлоги и союзы из названия
     a_words = {w for w in a_words if len(w) > 2}
     
-    # Если есть пересечение слов, значит нейросеть проболталась
     if q_words.intersection(a_words):
         return True
     return False
 
 # ==========================================
-# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (КАРТИНКИ И ОПЕНИНГИ)
+# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (Shikimori + AnimeThemes)
 # ==========================================
 
-def fetch_anime_image(anime_name):
+def get_shikimori_info(anime_name):
+    """
+    Ищет аниме на Shikimori. Возвращает: (ID_аниме, Ромадзи_название)
+    """
     try:
-        search_url = f"https://api.jikan.moe/v4/anime?q={anime_name}&limit=1"
-        search_res = requests.get(search_url, timeout=10).json()
+        headers = {"User-Agent": "AnimeQuizBot"}
+        search_url = f"https://shikimori.one/api/animes?search={anime_name}&limit=1"
+        res = requests.get(search_url, headers=headers, timeout=10).json()
         
-        if not search_res.get('data'):
-            return None
-            
-        anime_id = search_res['data'][0]['mal_id']
-        
-        pics_url = f"https://api.jikan.moe/v4/anime/{anime_id}/pictures"
-        pics_res = requests.get(pics_url, timeout=10).json()
-        
-        if pics_res.get('data'):
-            pic = random.choice(pics_res['data'])
-            return pic['jpg']['large_image_url']
+        if res and isinstance(res, list) and len(res) > 0:
+            return res[0]['id'], res[0]['name']
     except Exception as e:
-        print(f"Ошибка поиска картинки: {e}")
+        print(f"Ошибка поиска на Shikimori для '{anime_name}': {e}")
+    return None, None
+
+def fetch_anime_image(anime_name):
+    """Ищет реальный кадр (скриншот) из самого аниме (без логотипов и названий)"""
+    anime_id, _ = get_shikimori_info(anime_name)
+    if not anime_id:
+        return None
+        
+    try:
+        headers = {"User-Agent": "AnimeQuizBot"}
+        url = f"https://shikimori.one/api/animes/{anime_id}/screenshots"
+        res = requests.get(url, headers=headers, timeout=10).json()
+        
+        if res and isinstance(res, list) and len(res) > 0:
+            pic = random.choice(res)
+            return "https://shikimori.one" + pic['original']
+    except Exception as e:
+        print(f"Ошибка получения кадра для '{anime_name}': {e}")
     return None
 
 def fetch_anime_opening(anime_name):
+    """Ищет видео опенинга, используя Ромадзи-название"""
+    _, romaji_name = get_shikimori_info(anime_name)
+    search_query = romaji_name if romaji_name else anime_name
+    
     try:
-        url = f"https://api.animethemes.moe/anime?q={anime_name}&include=animethemes.animethemeentries.videos"
+        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos"
         res = requests.get(url, timeout=15).json()
         
         if not res.get('anime'):
@@ -160,7 +174,7 @@ def fetch_anime_opening(anime_name):
             video_url = ops[0]['animethemeentries'][0]['videos'][0]['link']
             return video_url
     except Exception as e:
-        print(f"Ошибка поиска опенинга: {e}")
+        print(f"Ошибка поиска опенинга для '{anime_name}': {e}")
     return None
 
 # ==========================================
@@ -226,7 +240,6 @@ def generate_quiz_content(anime_name, token):
 
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     
-    # Оставляем только те шаблоны, чей media_type отличается от прошлого
     available = [t for t in question_templates if t["media_type"] != last_media]
     if not available:
         available = question_templates
@@ -236,7 +249,6 @@ def generate_quiz_content(anime_name, token):
     for template in available:
         media_url = None
         
-        # Поиск медиа
         if template["media_type"] == "image":
             media_url = fetch_anime_image(anime_name)
             if not media_url: continue 
@@ -245,18 +257,17 @@ def generate_quiz_content(anime_name, token):
             media_url = fetch_anime_opening(anime_name)
             if not media_url: continue 
             
-        # Генерация с проверкой (до 3 попыток на перегенерацию, если ИИ проболтался)
         for attempt in range(3):
             raw_question = giga_request(template["prompt"], token, max_tokens=250)
             question = clean_question(raw_question)
             
-            # Проверяем, есть ли ответ в самом вопросе
             if question and not is_answer_in_question(question, anime_name):
                 save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
                 save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
                 return question, media_url, template["media_type"]
             else:
-                print(f"Попытка {attempt + 1}: Нейросеть проболталась или выдала пустой ответ. Пробуем снова...")
+                print(f"Попытка {attempt + 1}: Пустой ответ или спойлер. Ждем 3 секунды...")
+                time.sleep(3)
 
     return None, None, None
 
@@ -296,7 +307,7 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
 def main():
     all_anime = load_popular_anime()
     if len(all_anime) < 4:
-        print("Недостаточно названий для создания вариантов (нужно минимум 4)")
+        print("Недостаточно названий (нужно минимум 4)")
         return
 
     token = get_gigachat_token()
