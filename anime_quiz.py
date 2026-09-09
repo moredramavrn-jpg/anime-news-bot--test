@@ -15,10 +15,12 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 
-# Файлы данных
-POPULAR_ANIME_FILE = "popular_anime.txt"
-LAST_QUIZ_TYPE_FILE = "last_quiz_type.txt"
-LAST_MEDIA_TYPE_FILE = "last_media_type.txt"
+# === ЖЕСТКАЯ ПРИВЯЗКА ПУТЕЙ К ПАПКЕ СКРИПТА ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POPULAR_ANIME_FILE = os.path.join(BASE_DIR, "popular_anime.txt")
+LAST_QUIZ_TYPE_FILE = os.path.join(BASE_DIR, "last_quiz_type.txt")
+LAST_MEDIA_TYPE_FILE = os.path.join(BASE_DIR, "last_media_type.txt")
+# ==============================================
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -26,7 +28,7 @@ gigachat_access_token = None
 gigachat_token_expires_at = 0
 
 # ==========================================
-# 1. РАБОТА С GIGACHAT (ТЕКСТОВЫЕ ВОПРОСЫ)
+# 1. РАБОТА С GIGACHAT
 # ==========================================
 
 def get_gigachat_token():
@@ -68,7 +70,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.0"
+        "User-Agent": "AnimeQuizBot/9.2"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -139,7 +141,7 @@ def get_shikimori_info(anime_name):
         if res and isinstance(res, list) and len(res) > 0:
             return res[0]['id'], res[0]['name']
     except Exception as e:
-        print(f"Ошибка поиска на Shikimori для '{anime_name}': {e}")
+        pass
     return None, None
 
 def fetch_anime_image(anime_name):
@@ -164,7 +166,7 @@ def fetch_anime_audio(anime_name):
     search_query = romaji_name if romaji_name else anime_name
     
     try:
-        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.audios"
+        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos.audio"
         res = requests.get(url, timeout=20).json()
         
         if not res.get('anime'):
@@ -175,15 +177,19 @@ def fetch_anime_audio(anime_name):
         
         for op in ops:
             for entry in op.get('animethemeentries', []):
-                audios = entry.get('audios', [])
-                if audios:
-                    return audios[0]['link']
-    except Exception:
-        pass
+                videos = entry.get('videos', [])
+                for video in videos:
+                    audio = video.get('audio')
+                    if audio and audio.get('link'):
+                        return audio['link']
+                        
+        print(f"[DEBUG] Для '{anime_name}' не найдено аудио.")
+    except Exception as e:
+        print(f"[ERROR] Ошибка поиска аудио для '{anime_name}': {e}")
     return None
 
 # ==========================================
-# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ
+# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ (С ЛОГИРОВАНИЕМ)
 # ==========================================
 
 def load_last_value(filename):
@@ -193,8 +199,12 @@ def load_last_value(filename):
     return None
 
 def save_last_value(filename, value):
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(value)
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(value)
+        print(f"[DEBUG] Состояние успешно сохранено: '{value}' в файл {os.path.basename(filename)}")
+    except Exception as e:
+        print(f"[ERROR] Не удалось сохранить файл {filename}: {e}")
 
 def load_popular_anime():
     if not os.path.exists(POPULAR_ANIME_FILE):
@@ -287,12 +297,12 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         media_msg = None
         
         if media_type == "image" and media_url:
-            print("Скачиваю картинку...")
+            print("[DEBUG] Скачиваю картинку...")
             img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=20).content
             media_msg = bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
         
         elif media_type == "audio" and media_url:
-            print("Скачиваю аудио опенинга...")
+            print("[DEBUG] Скачиваю аудио опенинга...")
             audio_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
             
             audio_file = io.BytesIO(audio_data)
@@ -311,28 +321,29 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
             is_anonymous=True,
             reply_to_message_id=reply_id 
         )
-        print(f"Викторина опубликована. Тип: {media_type}")
+        print(f"[SUCCESS] Викторина опубликована. Тип: {media_type}")
     except Exception as e:
-        print(f"Ошибка отправки опроса: {e}")
+        print(f"[ERROR] Ошибка отправки опроса: {e}")
 
 def main():
     all_anime = load_popular_anime()
     if len(all_anime) < 4:
-        print("Недостаточно названий (нужно минимум 4)")
+        print("[ERROR] Недостаточно названий в файле popular_anime.txt (нужно минимум 4)")
         return
 
     token = get_gigachat_token()
     if not token:
-        print("Не удалось получить токен GigaChat")
+        print("[ERROR] Не удалось получить токен GigaChat")
         return
 
-    # Определяем, какой формат нам нужен СЕЙЧАС (строгое чередование)
+    # Читаем прошлый формат и определяем следующий
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
+    print(f"[DEBUG] Прошлый формат из файла: '{last_media}'")
+    
     sequence = {"text": "image", "image": "audio", "audio": "text"}
     target_media = sequence.get(last_media, "text")
-    print(f"Целевой формат викторины: {target_media}")
+    print(f"[DEBUG] Целевой формат на сейчас: '{target_media}'")
 
-    # Бот делает до 10 попыток найти аниме, которое поддерживает нужный формат
     quiz_data = None
     for attempt in range(10):
         correct_anime = random.choice(all_anime)
@@ -346,21 +357,20 @@ def main():
             quiz_data = (correct_anime, wrong_answers, question, media_url)
             break
         else:
-            print(f"Аниме '{correct_anime}' не подошло для формата {target_media}. Ищу другое...")
+            print(f"[DEBUG] Аниме '{correct_anime}' не подошло для формата '{target_media}'. Ищу другое...")
 
     if not quiz_data:
-        print(f"Критическая ошибка: Не удалось создать викторину формата {target_media} за 10 попыток.")
+        print(f"[ERROR] Критическая ошибка: Не удалось создать викторину формата '{target_media}' за 10 попыток.")
         return
 
     correct_anime, wrong_answers, question, media_url = quiz_data
-
     options = [correct_anime] + wrong_answers
     random.shuffle(options)
     correct_index = options.index(correct_anime)
 
     send_quiz_poll(question, options, correct_index, media_url, target_media)
     
-    # Сохраняем формат ТОЛЬКО после успешной отправки, чтобы цепочка не сбивалась
+    # Сохраняем формат ТОЛЬКО после успешной отправки
     save_last_value(LAST_MEDIA_TYPE_FILE, target_media)
 
 if __name__ == "__main__":
