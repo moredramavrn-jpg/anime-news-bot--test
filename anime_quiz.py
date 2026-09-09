@@ -65,7 +65,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/10.4"
+        "User-Agent": "AnimeQuizBot/10.5"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -229,7 +229,6 @@ def generate_strict_quiz(search_name, display_name, token, target_media, anime_i
         return random.choice(["Узнаете это лицо? Как зовут персонажа?", "Проверим память на лица! Кто изображен на арте?", "Один взгляд — и всё ясно. Кто это?"]), char_img
 
     else: 
-        # НОВЫЕ СТРОГИЕ ФОРМАТЫ (без фантазий, только по фактам аниме)
         templates = [
             {"type": "завязка сюжета", "prompt": f"Напиши интригующее описание завязки сюжета аниме «{display_name}». КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать имена персонажей и название аниме. Закончи вопросом 'Из какого это аниме?'. СТРОГО до 200 символов."},
             {"type": "устройство мира", "prompt": f"Опиши уникальные правила мира, вселенной или местную систему сил/магии из аниме «{display_name}». КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать имена героев и название аниме. Закончи вопросом 'Где существуют такие законы?'. СТРОГО до 200 символов."},
@@ -257,6 +256,9 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
     full_question = f"{header}{question_text}"
     if len(full_question) > 300: full_question = full_question[:297] + "..."
 
+    # ЗАЩИТА ОТ ДЛИННЫХ ВАРИАНТОВ ОТВЕТА (Лимит Telegram - 100 символов)
+    safe_options = [opt[:97] + "..." if len(opt) > 100 else opt for opt in options]
+
     try:
         media_msg = None
         if media_type in ["image", "image_char"] and media_url:
@@ -282,7 +284,7 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
             if os.path.exists("temp.mp4"): os.remove("temp.mp4")
 
         bot.send_poll(
-            chat_id=CHANNEL_ID, question=full_question, options=options, type="quiz",
+            chat_id=CHANNEL_ID, question=full_question, options=safe_options, type="quiz",
             correct_option_id=correct_index, open_period=86400, is_anonymous=True,
             reply_to_message_id=media_msg.message_id if media_msg else None
         )
@@ -348,10 +350,10 @@ def main():
                 else: 
                     opt = f"Неизвестный Герой ({display_wa})"
                 
-                wrong_chars.append(opt[:97] + "..." if len(opt) > 100 else opt)
+                wrong_chars.append(opt)
 
             opt_correct = f"{char_name} ({display_correct_anime})"
-            display_correct = opt_correct[:97] + "..." if len(opt_correct) > 100 else opt_correct
+            display_correct = opt_correct
             display_wrongs = wrong_chars
             
             question, media_url = generate_strict_quiz(correct_anime, display_correct_anime, token, target_media, anime_id, char_img=char_img, romaji_name=romaji_name)
