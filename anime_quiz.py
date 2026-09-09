@@ -68,7 +68,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/4.3"
+        "User-Agent": "AnimeQuizBot/6.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -120,7 +120,6 @@ def clean_question(text):
 def is_answer_in_question(question, anime_name):
     q_words = set(re.findall(r'[а-яёa-z0-9]+', question.lower()))
     a_words = set(re.findall(r'[а-яёa-z0-9]+', anime_name.lower()))
-    
     a_words = {w for w in a_words if len(w) > 2}
     
     if q_words.intersection(a_words):
@@ -174,18 +173,14 @@ def fetch_anime_opening(anime_name):
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
         
-        # Лимит Telegram 50 МБ. Ставим безопасный предел в 45 МБ (47 185 920 байт).
         MAX_SIZE = 45 * 1024 * 1024 
         
         for op in ops:
             for entry in op.get('animethemeentries', []):
                 videos = entry.get('videos', [])
-                
-                # Ищем видео, которые весят меньше 45 МБ
                 valid_videos = [v for v in videos if v.get('size', float('inf')) < MAX_SIZE]
                 
                 if valid_videos:
-                    # Сортируем по весу от меньшего к большему, чтобы точно влезло
                     valid_videos.sort(key=lambda x: x.get('size', 0))
                     return valid_videos[0]['link']
                     
@@ -215,7 +210,7 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 # ==========================================
-# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ШАБЛОНЫ)
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ОПТИМИЗИРОВАННАЯ ЛОГИКА)
 # ==========================================
 
 def generate_quiz_content(anime_name, token):
@@ -237,26 +232,15 @@ def generate_quiz_content(anime_name, token):
         },
         {
             "type": "угадай по кадру",
-            "media_type": "image",
-            "prompt": (
-                "Сформулируй короткий, интригующий вопрос к прикрепленному кадру из аниме. "
-                "Суть вопроса: нужно угадать тайтл по картинке. "
-                "Выведи только текст вопроса без ответов, спойлеров и имен."
-            )
+            "media_type": "image"
         },
         {
             "type": "угадай опенинг",
-            "media_type": "video",
-            "prompt": (
-                "Сформулируй короткий, зажигательный вопрос к видео с опенингом аниме. "
-                "Суть вопроса: нужно угадать тайтл по музыке. "
-                "Выведи только текст вопроса без ответов, спойлеров и названия трека."
-            )
+            "media_type": "video"
         }
     ]
 
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
-    
     available = [t for t in question_templates if t["media_type"] != last_media]
     if not available:
         available = question_templates
@@ -266,25 +250,49 @@ def generate_quiz_content(anime_name, token):
     for template in available:
         media_url = None
         
+        # 4.1 Быстрая генерация для Картинки
         if template["media_type"] == "image":
             media_url = fetch_anime_image(anime_name)
             if not media_url: continue 
             
+            question = random.choice([
+                "Один взгляд на эту рисовку, и всё ясно! Откуда этот кадр?",
+                "Настоящий отаку узнает этот момент из тысячи. Что за аниме?",
+                "Проверим зрительную память! Из какого тайтла этот скриншот?",
+                "К какому аниме принадлежит этот кадр?"
+            ])
+            save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
+            save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
+            return question, media_url, template["media_type"]
+            
+        # 4.2 Быстрая генерация для Видео
         elif template["media_type"] == "video":
             media_url = fetch_anime_opening(anime_name)
             if not media_url: continue 
             
-        for attempt in range(3):
-            raw_question = giga_request(template["prompt"], token, max_tokens=250)
-            question = clean_question(raw_question)
+            question = random.choice([
+                "Узнаете эти ноты с первых секунд? Из какого аниме опенинг?",
+                "Этот трек точно есть в вашем плейлисте! Откуда он?",
+                "Слушаем и угадываем! В каком тайтле звучит эта песня?",
+                "Легендарный опенинг! Сможете назвать аниме?"
+            ])
+            save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
+            save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
+            return question, media_url, template["media_type"]
             
-            if question and not is_answer_in_question(question, anime_name):
-                save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
-                save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
-                return question, media_url, template["media_type"]
-            else:
-                print(f"Попытка {attempt + 1}: Пустой ответ или спойлер. Ждем 3 секунды...")
-                time.sleep(3)
+        # 4.3 Генерация Текста через ИИ с защитой от спойлеров
+        else:
+            for attempt in range(3):
+                raw_question = giga_request(template["prompt"], token, max_tokens=250)
+                question = clean_question(raw_question)
+                
+                if question and not is_answer_in_question(question, anime_name):
+                    save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
+                    save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
+                    return question, media_url, template["media_type"]
+                else:
+                    print(f"Попытка {attempt + 1}: Пустой ответ или спойлер в тексте. Ждем 3 секунды...")
+                    time.sleep(3)
 
     return None, None, None
 
@@ -300,19 +308,22 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         full_question = full_question[:297] + "..."
 
     try:
+        media_msg = None
+        
+        # Скачиваем и отправляем медиафайл
         if media_type == "image" and media_url:
             print("Скачиваю картинку...")
             img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=20).content
-            bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
-            time.sleep(1) 
+            media_msg = bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
         
         elif media_type == "video" and media_url:
             print("Скачиваю видео опенинга...")
-            # Поток скачивания, чтобы визуально можно было отслеживать в консоли (опционально)
             vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=60).content
             print("Видео скачано. Отправляю в Telegram...")
-            bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
-            time.sleep(1)
+            media_msg = bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
+
+        # Отправляем опрос (как ответ на медиа, если оно есть)
+        reply_id = media_msg.message_id if media_msg else None
 
         bot.send_poll(
             chat_id=CHANNEL_ID,
@@ -321,7 +332,8 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
             type="quiz",
             correct_option_id=correct_index,
             open_period=86400,
-            is_anonymous=True
+            is_anonymous=True,
+            reply_to_message_id=reply_id 
         )
         print(f"Викторина опубликована. Тип: {media_type}")
     except Exception as e:
@@ -350,7 +362,7 @@ def main():
     question, media_url, media_type = generate_quiz_content(correct_anime, token)
     
     if not question:
-        print("Не удалось сгенерировать корректный вопрос (возможно ИИ все время сливал ответ)")
+        print("Не удалось сгенерировать корректный вопрос.")
         return
 
     options = [correct_anime] + wrong_answers
