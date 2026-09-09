@@ -17,13 +17,13 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests pyTelegramBotAPI google-generativeai
+        run: pip install requests pyTelegramBotAPI google-genai
 
       - name: Run anime_quiz.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          GIGACHAT_AUTHORIZATION_KEY: ${{ secrets.GIGACHAT_AUTHORIZATION_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python anime_quiz.py
 
       - name: Commit and push state
