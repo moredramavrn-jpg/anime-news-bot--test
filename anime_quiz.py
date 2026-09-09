@@ -70,7 +70,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.5"
+        "User-Agent": "AnimeQuizBot/9.6"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -211,95 +211,91 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 def get_base_name(name):
-    """Вычленяет чистое корневое название франшизы."""
+    """Вычленяет чистое корневое название франшизы для фильтрации дублей."""
     base = name.lower()
-    
-    # 1. Спасаем Re:Zero (заменяем на слитное слово временно)
     base = base.replace('re:zero', 'rezero')
-    
-    # 2. Режем по двоеточию с пробелом, тире, или точке с пробелом
     base = re.split(r':\s+| - | — |\.\s+', base)[0]
-    
-    # 3. Убираем года в скобках, например (2014)
     base = re.sub(r'\s*\(\d{4}\)', '', base)
-    
-    # 4. Убираем слова-маркеры (Фильм, сезон, ova)
     base = re.sub(r'\s+(фильм|сезон|часть|ova|ona|movie|tv).*', '', base)
-    
-    # 5. Убираем цифры на конце (например Наруто 7 -> Наруто)
     base = re.sub(r'\s+\d+$', '', base)
-    
     return base.strip()
 
 def are_same_franchise(name1, name2):
     """Проверяет, относятся ли два тайтла к одной франшизе."""
     b1 = get_base_name(name1)
     b2 = get_base_name(name2)
-    
-    if b1 == b2:
-        return True
-        
-    # Проверка на вложенность ("Драконий жемчуг" и "Драконий жемчуг Зет")
+    if b1 == b2: return True
     if len(b1) > 4 and len(b2) > 4:
-        if b1.startswith(b2 + " ") or b2.startswith(b1 + " "):
-            return True
-            
-    # Фикс для ДжоДжо (разные переводы слова "приключение")
-    if "джоджо" in b1 and "джоджо" in b2:
-        return True
-        
+        if b1.startswith(b2 + " ") or b2.startswith(b1 + " "): return True
+    if "джоджо" in b1 and "джоджо" in b2: return True
     return False
+
+def format_display_name(name):
+    """Очищает название для красивого показа в опросе (оставляет Re:Zero целым)."""
+    base = name
+    
+    # Режем по двоеточию С ПРОБЕЛОМ. В "Re:Zero" пробела нет, поэтому оно уцелеет!
+    # "Re:Zero. Жизнь с нуля..." отрежется по точке с пробелом до "Re:Zero"
+    base = re.split(r':\s+| - | — |\.\s+', base)[0]
+    
+    # Убираем года в скобках
+    base = re.sub(r'\s*\(\d{4}\)', '', base)
+    
+    # Убираем технические слова
+    base = re.sub(r'\s+(Фильм|Сезон|Часть|OVA|ONA|Movie|TV|фильм|сезон|часть).*', '', base)
+    
+    return base.strip()
 
 # ==========================================
 # 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
 # ==========================================
 
-def generate_strict_quiz(anime_name, token, target_media):
+def generate_strict_quiz(search_name, display_name, token, target_media):
     question_templates = [
         {
             "type": "история браузера",
             "media_type": "text",
-            "prompt": f"Придумай 3 ОЧЕНЬ КОРОТКИХ смешных поисковых запроса в браузере, которые мог бы вбивать герой аниме «{anime_name}». Без имен. Предложи угадать тайтл. СТРОГО до 200 символов суммарно."
+            "prompt": f"Придумай 3 ОЧЕНЬ КОРОТКИХ смешных поисковых запроса в браузере, которые мог бы вбивать герой аниме «{display_name}». Без имен. Предложи угадать тайтл. СТРОГО до 200 символов суммарно."
         },
         {
             "type": "заметки психотерапевта",
             "media_type": "text",
-            "prompt": f"Напиши ОЧЕНЬ КОРОТКУЮ заметку от лица психотерапевта, к которому пришел герой аниме «{anime_name}». Врач в шоке (без имен). В конце попроси угадать тайтл. МАКСИМУМ 2-3 предложения, до 200 символов."
+            "prompt": f"Напиши ОЧЕНЬ КОРОТКУЮ заметку от лица психотерапевта, к которому пришел герой аниме «{display_name}». Врач в шоке (без имен). В конце попроси угадать тайтл. МАКСИМУМ 2-3 предложения, до 200 символов."
         },
         {
             "type": "полицейская сводка",
             "media_type": "text",
-            "prompt": f"Составь КРАТКУЮ смешную полицейскую сводку о разрушениях после драки в аниме «{anime_name}». Опиши способности (без имен). Спроси, где это произошло. СТРОГО до 200 символов."
+            "prompt": f"Составь КРАТКУЮ смешную полицейскую сводку о разрушениях после драки в аниме «{display_name}». Опиши способности (без имен). Спроси, где это произошло. СТРОГО до 200 символов."
         },
         {
             "type": "отзыв хейтера",
             "media_type": "text",
-            "prompt": f"Напиши ОЧЕНЬ КОРОТКИЙ 'гневный' и смешной отзыв зрителя на логику мира аниме «{anime_name}» (без имен). Закончи вопросом к читателям. Максимум 2 предложения, до 200 символов."
+            "prompt": f"Напиши ОЧЕНЬ КОРОТКИЙ 'гневный' и смешной отзыв зрителя на логику мира аниме «{display_name}» (без имен). Закончи вопросом к читателям. Максимум 2 предложения, до 200 символов."
         },
         {
             "type": "глазами прохожего (POV)",
             "media_type": "text",
-            "prompt": f"Опиши ОЧЕНЬ КРАТКО безумную сцену из аниме «{anime_name}» от лица прохожего. Имена не называй. В конце спроси, из какого это аниме. Уложись в 2 предложения, до 200 символов."
+            "prompt": f"Опиши ОЧЕНЬ КРАТКО безумную сцену из аниме «{display_name}» от лица прохожего. Имена не называй. В конце спроси, из какого это аниме. Уложись в 2 предложения, до 200 символов."
         },
         {
             "type": "ребус из эмодзи",
             "media_type": "text",
-            "prompt": f"Подбери 4-5 эмодзи, которые идеально описывают сюжет аниме «{anime_name}». Выведи эмодзи и задай вопрос 'Какое аниме здесь скрыто?'."
+            "prompt": f"Подбери 4-5 эмодзи, которые идеально описывают сюжет аниме «{display_name}». Выведи эмодзи и задай вопрос 'Какое аниме здесь скрыто?'."
         },
         {
             "type": "три ассоциации",
             "media_type": "text",
-            "prompt": f"Выбери 3 уникальных предмета или термина (НЕ имена) из аниме «{anime_name}». Перечисли их и спроси 'Для какого мира характерны эти вещи?'"
+            "prompt": f"Выбери 3 уникальных предмета или термина (НЕ имена) из аниме «{display_name}». Перечисли их и спроси 'Для какого мира характерны эти вещи?'"
         },
         {
             "type": "анкета знакомств",
             "media_type": "text",
-            "prompt": f"Напиши ОЧЕНЬ КОРОТКУЮ абсурдную анкету для сайта знакомств от лица персонажа «{anime_name}». Плюсы и минусы (без имен). Закончи вопросом, откуда герой. СТРОГО до 200 символов."
+            "prompt": f"Напиши ОЧЕНЬ КОРОТКУЮ абсурдную анкету для сайта знакомств от лица персонажа «{display_name}». Плюсы и минусы (без имен). Закончи вопросом, откуда герой. СТРОГО до 200 символов."
         }
     ]
 
     if target_media == "image":
-        media_url = fetch_anime_image(anime_name)
+        media_url = fetch_anime_image(search_name)
         if not media_url: return None, None 
         
         question = random.choice([
@@ -312,7 +308,7 @@ def generate_strict_quiz(anime_name, token, target_media):
         return question, media_url
         
     elif target_media == "audio":
-        media_url = fetch_anime_audio(anime_name)
+        media_url = fetch_anime_audio(search_name)
         if not media_url: return None, None 
         
         question = random.choice([
@@ -336,7 +332,8 @@ def generate_strict_quiz(anime_name, token, target_media):
             raw_question = giga_request(template["prompt"], token, max_tokens=250)
             question = clean_question(raw_question)
             
-            if question and not is_answer_in_question(question, anime_name):
+            # Двойная проверка на спойлеры: и по полному имени, и по короткому
+            if question and not (is_answer_in_question(question, display_name) or is_answer_in_question(question, search_name)):
                 save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
                 return question, None
             else:
@@ -408,8 +405,9 @@ def main():
 
     quiz_data = None
     for attempt in range(10):
-        # 1. Выбираем правильный ответ
+        # 1. Выбираем правильный ответ (Оригинальное имя для поиска картинок/аудио)
         correct_anime = random.choice(all_anime)
+        display_correct = format_display_name(correct_anime) # Красивое имя для показа
         
         # 2. Собираем УНИКАЛЬНЫЕ неправильные ответы
         wrong_answers = []
@@ -435,11 +433,14 @@ def main():
         if len(wrong_answers) < 3: 
             continue
 
-        # 3. Генерируем вопрос
-        question, media_url = generate_strict_quiz(correct_anime, token, target_media)
+        # Форматируем неправильные ответы для показа
+        display_wrongs = [format_display_name(w) for w in wrong_answers]
+
+        # 3. Генерируем вопрос (передаем оба имени)
+        question, media_url = generate_strict_quiz(correct_anime, display_correct, token, target_media)
         
         if question:
-            quiz_data = (correct_anime, wrong_answers, question, media_url)
+            quiz_data = (display_correct, display_wrongs, question, media_url)
             break
         else:
             print(f"[DEBUG] Аниме '{correct_anime}' не подошло для формата '{target_media}'. Ищу другое...")
@@ -448,10 +449,10 @@ def main():
         print(f"[ERROR] Критическая ошибка: Не удалось создать викторину формата '{target_media}' за 10 попыток.")
         return
 
-    correct_anime, wrong_answers, question, media_url = quiz_data
-    options = [correct_anime] + wrong_answers
+    final_correct, final_wrongs, question, media_url = quiz_data
+    options = [final_correct] + final_wrongs
     random.shuffle(options)
-    correct_index = options.index(correct_anime)
+    correct_index = options.index(final_correct)
 
     send_quiz_poll(question, options, correct_index, media_url, target_media)
     
