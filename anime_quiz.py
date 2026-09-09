@@ -43,10 +43,8 @@ def get_gigachat_token():
     }
     data = {"scope": "GIGACHAT_API_PERS"}
     
-    # Делаем до 3-х попыток получить токен
     for attempt in range(3):
         try:
-            # Увеличили timeout до 30 секунд
             r = requests.post(url, headers=headers, data=data, timeout=30, verify=False)
             r.raise_for_status()
             token_data = r.json()
@@ -59,7 +57,7 @@ def get_gigachat_token():
             return gigachat_access_token
         except Exception as e:
             print(f"Попытка {attempt + 1}: Ошибка получения токена GigaChat: {e}")
-            time.sleep(3) # Ждем 3 секунды перед повторной попыткой
+            time.sleep(3)
             
     print("Не удалось получить токен после 3 попыток.")
     return None
@@ -70,7 +68,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/4.2"
+        "User-Agent": "AnimeQuizBot/4.3"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -96,7 +94,7 @@ def giga_request(prompt, token, max_tokens=300):
                 "https://api.giga.chat/v1/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=30, # Также увеличили таймаут для генерации текста
+                timeout=30,
                 verify=False
             )
             response.raise_for_status()
@@ -176,9 +174,22 @@ def fetch_anime_opening(anime_name):
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
         
-        if ops:
-            video_url = ops[0]['animethemeentries'][0]['videos'][0]['link']
-            return video_url
+        # Лимит Telegram 50 МБ. Ставим безопасный предел в 45 МБ (47 185 920 байт).
+        MAX_SIZE = 45 * 1024 * 1024 
+        
+        for op in ops:
+            for entry in op.get('animethemeentries', []):
+                videos = entry.get('videos', [])
+                
+                # Ищем видео, которые весят меньше 45 МБ
+                valid_videos = [v for v in videos if v.get('size', float('inf')) < MAX_SIZE]
+                
+                if valid_videos:
+                    # Сортируем по весу от меньшего к большему, чтобы точно влезло
+                    valid_videos.sort(key=lambda x: x.get('size', 0))
+                    return valid_videos[0]['link']
+                    
+        print(f"Для '{anime_name}' все опенинги слишком тяжелые (>45 МБ). Пропускаю видео.")
     except Exception as e:
         print(f"Ошибка поиска опенинга для '{anime_name}': {e}")
     return None
@@ -297,7 +308,9 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         
         elif media_type == "video" and media_url:
             print("Скачиваю видео опенинга...")
-            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=40).content
+            # Поток скачивания, чтобы визуально можно было отслеживать в консоли (опционально)
+            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=60).content
+            print("Видео скачано. Отправляю в Telegram...")
             bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
             time.sleep(1)
 
