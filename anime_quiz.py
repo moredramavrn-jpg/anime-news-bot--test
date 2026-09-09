@@ -17,6 +17,7 @@ GIGACHAT_AUTHORIZATION_KEY = os.getenv("GIGACHAT_AUTHORIZATION_KEY")
 # Файлы данных
 POPULAR_ANIME_FILE = "popular_anime.txt"
 LAST_QUIZ_TYPE_FILE = "last_quiz_type.txt"
+LAST_MEDIA_TYPE_FILE = "last_media_type.txt" # Новый файл для чередования визуала
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -62,7 +63,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/2.0"
+        "User-Agent": "AnimeQuizBot/3.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -73,7 +74,7 @@ def giga_request(prompt, token, max_tokens=300):
                     "Ты — харизматичный ведущий викторины по аниме. "
                     "Генерируй ровно один короткий вопрос без вводных слов. "
                     "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
-                    "Никогда не пиши само название в тексте вопроса."
+                    "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме в тексте своего вопроса!"
                 )
             },
             {"role": "user", "content": prompt}
@@ -107,12 +108,24 @@ def clean_question(text):
         return question
     return ""
 
+def is_answer_in_question(question, anime_name):
+    """Проверяет, нет ли слов из названия аниме в самом вопросе (защита от спойлеров)"""
+    q_words = set(re.findall(r'[а-яёa-z0-9]+', question.lower()))
+    a_words = set(re.findall(r'[а-яёa-z0-9]+', anime_name.lower()))
+    
+    # Исключаем короткие предлоги и союзы из названия
+    a_words = {w for w in a_words if len(w) > 2}
+    
+    # Если есть пересечение слов, значит нейросеть проболталась
+    if q_words.intersection(a_words):
+        return True
+    return False
+
 # ==========================================
 # 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (КАРТИНКИ И ОПЕНИНГИ)
 # ==========================================
 
 def fetch_anime_image(anime_name):
-    """Ищет случайный кадр или постер аниме через Jikan API"""
     try:
         search_url = f"https://api.jikan.moe/v4/anime?q={anime_name}&limit=1"
         search_res = requests.get(search_url, timeout=10).json()
@@ -133,7 +146,6 @@ def fetch_anime_image(anime_name):
     return None
 
 def fetch_anime_opening(anime_name):
-    """Ищет видео опенинга через AnimeThemes API"""
     try:
         url = f"https://api.animethemes.moe/anime?q={anime_name}&include=animethemes.animethemeentries.videos"
         res = requests.get(url, timeout=15).json()
@@ -152,17 +164,35 @@ def fetch_anime_opening(anime_name):
     return None
 
 # ==========================================
-# 3. ГЕНЕРАЦИЯ ВОПРОСОВ (ШАБЛОНЫ)
+# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ
+# ==========================================
+
+def load_last_value(filename):
+    if os.path.exists(filename):
+        with open(filename, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    return None
+
+def save_last_value(filename, value):
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(value)
+
+def load_popular_anime():
+    if not os.path.exists(POPULAR_ANIME_FILE):
+        return []
+    with open(POPULAR_ANIME_FILE, 'r', encoding='utf-8') as f:
+        return [line.strip() for line in f if line.strip()]
+
+# ==========================================
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ШАБЛОНЫ)
 # ==========================================
 
 def generate_quiz_content(anime_name, token):
-    """Возвращает кортеж: (Текст вопроса, Ссылка на медиа, Тип медиа)"""
-    
     question_templates = [
         {
             "type": "плохое описание сюжета",
             "media_type": "text",
-            "prompt": f"Опиши сюжет аниме «{anime_name}» максимально смешно и абсурдно, но так, чтобы фанаты смогли его узнать (Например: 'Подросток съел палец деда и теперь должен собрать остальные'). НЕ используй имена героев. Начни с 'В каком аниме...?'"
+            "prompt": f"Опиши сюжет аниме «{anime_name}» смешно и абсурдно. НЕ используй имена героев. Начни с 'В каком аниме...?'"
         },
         {
             "type": "ребус из эмодзи",
@@ -180,8 +210,6 @@ def generate_quiz_content(anime_name, token):
             "prompt": (
                 "Сформулируй короткий, интригующий вопрос к прикрепленному кадру из аниме. "
                 "Суть вопроса: нужно угадать тайтл по картинке. "
-                "Напиши это в стиле харизматичного ведущего. Например: 'Один взгляд на эту рисовку, и всё становится ясно! Откуда этот кадр?' "
-                "или 'Настоящий отаку узнает этот момент из тысячи. В каком аниме мы это видели?'. "
                 "Выведи только текст вопроса без ответов, спойлеров и имен."
             )
         },
@@ -190,16 +218,16 @@ def generate_quiz_content(anime_name, token):
             "media_type": "video",
             "prompt": (
                 "Сформулируй короткий, зажигательный вопрос к видео с опенингом аниме. "
-                "Суть вопроса: нужно угадать тайтл по музыке и видеоряду. "
-                "Например: 'Узнаете эти ноты с первых секунд? Из какого аниме этот шикарный опенинг?' "
-                "или 'Этот трек точно есть в вашем плейлисте! Откуда этот опенинг?'. "
+                "Суть вопроса: нужно угадать тайтл по музыке. "
                 "Выведи только текст вопроса без ответов, спойлеров и названия трека."
             )
         }
     ]
 
-    last_type = load_last_quiz_type()
-    available = [t for t in question_templates if t["type"] != last_type]
+    last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
+    
+    # Оставляем только те шаблоны, чей media_type отличается от прошлого
+    available = [t for t in question_templates if t["media_type"] != last_media]
     if not available:
         available = question_templates
 
@@ -208,6 +236,7 @@ def generate_quiz_content(anime_name, token):
     for template in available:
         media_url = None
         
+        # Поиск медиа
         if template["media_type"] == "image":
             media_url = fetch_anime_image(anime_name)
             if not media_url: continue 
@@ -216,34 +245,24 @@ def generate_quiz_content(anime_name, token):
             media_url = fetch_anime_opening(anime_name)
             if not media_url: continue 
             
-        raw_question = giga_request(template["prompt"], token, max_tokens=250)
-        question = clean_question(raw_question)
-        
-        if question:
-            save_last_quiz_type(template["type"])
-            return question, media_url, template["media_type"]
+        # Генерация с проверкой (до 3 попыток на перегенерацию, если ИИ проболтался)
+        for attempt in range(3):
+            raw_question = giga_request(template["prompt"], token, max_tokens=250)
+            question = clean_question(raw_question)
+            
+            # Проверяем, есть ли ответ в самом вопросе
+            if question and not is_answer_in_question(question, anime_name):
+                save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
+                save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
+                return question, media_url, template["media_type"]
+            else:
+                print(f"Попытка {attempt + 1}: Нейросеть проболталась или выдала пустой ответ. Пробуем снова...")
 
     return None, None, None
 
 # ==========================================
-# 4. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ОТПРАВКА
+# 5. ОТПРАВКА
 # ==========================================
-
-def load_last_quiz_type():
-    if os.path.exists(LAST_QUIZ_TYPE_FILE):
-        with open(LAST_QUIZ_TYPE_FILE, 'r', encoding='utf-8') as f:
-            return f.read().strip()
-    return None
-
-def save_last_quiz_type(qtype):
-    with open(LAST_QUIZ_TYPE_FILE, 'w', encoding='utf-8') as f:
-        f.write(qtype)
-
-def load_popular_anime():
-    if not os.path.exists(POPULAR_ANIME_FILE):
-        return []
-    with open(POPULAR_ANIME_FILE, 'r', encoding='utf-8') as f:
-        return [line.strip() for line in f if line.strip()]
 
 def send_quiz_poll(question_text, options, correct_index, media_url=None, media_type="text"):
     header = "🎌 Аниме-викторина\n\n"
@@ -270,7 +289,7 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
             open_period=86400,
             is_anonymous=True
         )
-        print("Викторина опубликована.")
+        print(f"Викторина опубликована. Тип: {media_type}")
     except Exception as e:
         print(f"Ошибка отправки опроса: {e}")
 
@@ -297,7 +316,7 @@ def main():
     question, media_url, media_type = generate_quiz_content(correct_anime, token)
     
     if not question:
-        print("Не удалось сгенерировать вопрос или найти медиа")
+        print("Не удалось сгенерировать корректный вопрос (возможно ИИ все время сливал ответ)")
         return
 
     options = [correct_anime] + wrong_answers
