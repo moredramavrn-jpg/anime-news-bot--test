@@ -6,7 +6,8 @@ import io
 import urllib3
 import telebot
 import requests
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -15,9 +16,10 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Настройка Gemini
+# Настройка клиента Gemini
+client = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # === ЖЕСТКАЯ ПРИВЯЗКА ПУТЕЙ К ПАПКЕ СКРИПТА ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,18 +35,24 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # ==========================================
 
 def gemini_request(prompt):
+    if not client:
+        print("[ERROR] Клиент Gemini не инициализирован. Проверьте GEMINI_API_KEY.")
+        return ""
+        
     try:
-        model = genai.GenerativeModel(
-            model_name='gemini-1.5-flash',
-            system_instruction=(
-                "Ты — харизматичный ведущий викторины по аниме. "
-                "Генерируй ровно один короткий креативный вопрос без вводных слов (таких как 'Конечно, вот вопрос:' и т.д.). "
-                "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
-                "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме или имена главных героев в тексте своего вопроса! "
-                "Пиши так, чтобы было интересно угадывать."
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "Ты — харизматичный ведущий викторины по аниме. "
+                    "Генерируй ровно один короткий креативный вопрос без вводных слов (таких как 'Конечно, вот вопрос:' и т.д.). "
+                    "Ответом на вопрос всегда является НАЗВАНИЕ АНИМЕ. "
+                    "КРАЙНЕ ВАЖНО: Никогда не используй слова из названия аниме или имена главных героев в тексте своего вопроса! "
+                    "Пиши так, чтобы было интересно угадывать."
+                )
             )
         )
-        response = model.generate_content(prompt)
         return response.text.strip()
     except Exception as e:
         print(f"[ERROR] Ошибка генерации Gemini: {e}")
@@ -126,7 +134,7 @@ def fetch_anime_audio(anime_name):
     return None
 
 # ==========================================
-# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ (С ЛОГИРОВАНИЕМ)
+# 3. ФАЙЛОВЫЕ ПОМОЩНИКИ
 # ==========================================
 
 def load_last_value(filename):
@@ -224,7 +232,7 @@ def generate_strict_quiz(anime_name, target_media):
         return question, media_url
         
     else: # Текст (Gemini)
-        if not GEMINI_API_KEY:
+        if not client:
             print("[ERROR] Ключ Gemini API не найден!")
             return None, None
             
