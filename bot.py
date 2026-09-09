@@ -30,6 +30,9 @@ SHIKIMORI_MAIN = "https://shikimori.io/"
 
 POSTED_FILE = "posted.txt"
 RECENT_TITLES_FILE = "recent_titles.json"
+PENDING_FILE = "pending_news.json"
+
+MAX_POSTS_PER_RUN = 1  # ОДИН ПОСТ ЗА ЗАПУСК
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -38,29 +41,22 @@ gigachat_token_expires_at = 0
 
 # ---------- Утилита: длина текста как её считает Telegram ----------
 def telegram_len(s):
-    """Telegram считает длину текста в UTF-16 code units, а не в Python len()."""
     if not s:
         return 0
     return len(s.encode('utf-16-le')) // 2
 
-# ---------- Разбиение на предложения (с защитой от аббревиатур типа P.A. Works) ----------
+# ---------- Разбиение на предложения ----------
 def split_sentences(text):
-    """Разбивает текст на предложения по .!? , но не разрывает распространённые
-    аббревиатуры и обозначения вида 'P.A. Works', 'U.S.A.', 'Vol.1' и т.п.,
-    где точка стоит после одной заглавной латинской/кириллической буквы."""
     if not text:
         return []
     return re.split(r'(?<![A-ZА-Я]\.)(?<=[.!?])\s+', text)
 
-# ---------- Проверка на слишком похожий текст (плагиат) ----------
+# ---------- Проверка на слишком похожий текст ----------
 def is_too_similar(original, rewritten, threshold=0.65):
-    """Проверяет, не скопировал ли GigaChat текст слишком близко к оригиналу"""
     if not original or not rewritten:
         return True
-    # Убираем знаки препинания и приводим к нижнему регистру
     o = re.sub(r'[^\w\s]', '', original.lower())
     r = re.sub(r'[^\w\s]', '', rewritten.lower())
-    # Разбиваем на слова
     o_words = set(o.split())
     r_words = set(r.split())
     if not o_words:
@@ -118,10 +114,20 @@ def save_recent_titles(titles):
     with open(RECENT_TITLES_FILE, 'w', encoding='utf-8') as f:
         json.dump(titles, f, ensure_ascii=False)
 
+# ---------- Работа с отложенными новостями ----------
+def load_pending():
+    if os.path.exists(PENDING_FILE):
+        with open(PENDING_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+def save_pending(pending_list):
+    with open(PENDING_FILE, 'w', encoding='utf-8') as f:
+        json.dump(pending_list, f, ensure_ascii=False, indent=2)
+
 # ---------- GigaChat API ----------
 def get_gigachat_token():
     global gigachat_access_token, gigachat_token_expires_at
-
     if gigachat_access_token and time.time() < gigachat_token_expires_at - 30:
         return gigachat_access_token
 
@@ -181,7 +187,6 @@ def giga_request(prompt, max_tokens=500):
 def is_similar_news(title, body, recent_titles):
     if not recent_titles:
         return False
-
     recent = '\n'.join([t["title"] for t in recent_titles[-20:]])
     prompt = f"""Сравни новую новость с уже опубликованными за последние 7 дней.
 
@@ -234,7 +239,6 @@ def extract_russian_anime_names(soup):
     pairs = {}
     if not soup:
         return pairs
-
     for name_en in soup.select('span.name-en'):
         parent = name_en.find_parent()
         if parent:
@@ -267,12 +271,11 @@ def extract_full_text_from_page(soup):
         for elem in soup.select(bad_selector):
             elem.decompose()
 
-    main_content = soup.select_one('div.editor-body')  # Goha.ru
+    main_content = soup.select_one('div.editor-body')
     if not main_content:
-        main_content = soup.select_one('div.news_text')  # КГ-Портал
-
+        main_content = soup.select_one('div.news_text')
     if not main_content:
-        main_content = soup.select_one('div.body-inner')  # Shikimori
+        main_content = soup.select_one('div.body-inner')
 
     if not main_content:
         selectors = [
@@ -292,13 +295,8 @@ def extract_full_text_from_page(soup):
     return ""
 
 def collapse_repeated_phrases(text, max_words=8):
-    """
-    Убирает подряд идущие повторы одной и той же фразы длиной 1-8 слов.
-    Также удаляет дублирование, когда одно и то же слово повторяется подряд.
-    """
     if not text:
         return text
-
     words = text.split()
     result = []
     i = 0
@@ -334,11 +332,6 @@ def collapse_repeated_phrases(text, max_words=8):
     return ' '.join(result)
 
 def clean_shikimori_links(text):
-    """
-    Очищает текст от дублей, создаваемых ссылками на Shikimori.
-    Например: «NarutoНаруто» -> «Наруто»
-    Hayato DateХаято Датэ -> Хаято Датэ
-    """
     if not text:
         return text
 
@@ -364,104 +357,65 @@ def clean_shikimori_links(text):
     return text
 
 def strip_romaji_title(text):
-    """
-    Если текст содержит длинное название на латинице/ромадзи, за которым сразу
-    в скобках идёт русский перевод — оставляет только русский перевод, без
-    оригинального нечитаемого названия. Например:
-    «Ore wa Buki dake ja Naku...» (Изгнанный читер-чародей...) -> «Изгнанный читер-чародей...»
-    """
     if not text:
         return text
-
     pattern = re.compile(
         r'«?[A-Za-z][A-Za-z0-9 ,\'\-«»?!]{8,}»\s*\(\s*([^()]*[А-Яа-я][^()]*)\)'
     )
-
     def repl(m):
         ru = m.group(1).strip()
         if not (ru.startswith('«') and ru.endswith('»')):
             ru = f'«{ru}»'
         return ru
-
     text = pattern.sub(repl, text)
     return text
 
 def extract_russian_title_from_text(text):
-    """
-    Ищет в тексте первый русскоязычный заголовок или название в кавычках.
-    Используется, когда в заголовке новости только ромадзи/латиница.
-    """
     if not text:
         return None
-    
-    # Ищем первое название в кавычках «...» с русским текстом внутри
     match = re.search(r'«([^»]*[А-Яа-я][^»]*)»', text)
     if match:
         russian_title = match.group(1).strip()
         if len(russian_title) > 2:
             return f'«{russian_title}»'
-    
-    # Ищем первое предложение, содержащее русские буквы (но не слишком длинное)
     sentences = split_sentences(text)
     for sent in sentences[:3]:
         if re.search(r'[А-Яа-я]', sent) and len(sent) < 150:
             if re.search(r'[А-Я][а-я]+', sent):
                 return sent.strip()
-    
     return None
 
 def clean_romaji_titles(text, title=None):
-    """
-    Очищает текст от длинных ромадзи-названий (стена латиницы),
-    оставляя только русский перевод.
-    
-    Если передан title, пытается восстановить русский заголовок из текста.
-    """
     if not text:
         return text
-    
-    # 1. Убираем длинные латинские названия, за которыми сразу идёт русский перевод
     pattern = r'[A-Za-z0-9\s\'\-]{10,}([А-Яа-я][^«»\n]{5,})'
     text = re.sub(pattern, r'\1', text)
-    
-    # 2. Убираем латинские названия в кавычках, если сразу после них идёт русское
     pattern = r'«[A-Za-z0-9\s\'\-]+»\s*«([^»]*[А-Яа-я][^»]*)»'
     text = re.sub(pattern, r'«\1»', text)
-    
-    # 3. Убираем одиночные длинные латинские слова в кавычках, если они не содержат русских букв
     pattern = r'«[A-Za-z0-9\s\'\-]{10,}»'
     text = re.sub(pattern, '', text)
-    
-    # 4. Если передан заголовок и он состоит только из латиницы/ромадзи
     if title and not re.search(r'[А-Яа-я]', title):
         russian_title = extract_russian_title_from_text(text)
         if russian_title:
             return russian_title, text
-    
     return text
 
 def clean_duplicate_title(title):
-    """Убирает дублирование в заголовке"""
     if not title:
         return title
-
     title = re.sub(r'«([A-Za-z0-9\s]+)([А-Яа-я\s]+)»', r'«\2»', title)
-
     title = re.sub(r'([А-Я][а-я]+\s+[А-Я][а-я]+)\s+\1', r'\1', title)
     title = re.sub(r'([А-Я][а-я]+)\s+\1(?=\s|$|[,.:;!?])', r'\1', title)
-
     words = title.split()
     result = []
     for w in words:
         if result and w.lower() == result[-1].lower():
             continue
         result.append(w)
-
     return ' '.join(result)
 
 def fetch_full_text(entry):
     link = entry.get('link', '')
-
     if 'shikimori' in link:
         soup = get_page_soup(link)
         if soup:
@@ -479,7 +433,6 @@ def fetch_full_text(entry):
         if summary:
             return clean_html(summary)
         return ""
-
     if link:
         soup = get_page_soup(link)
         if soup:
@@ -498,7 +451,6 @@ def fetch_full_text(entry):
 def extract_image_from_page(soup, page_url=None):
     if not soup:
         return None
-
     selectors = [
         'div.editor-body-image img', 'div.editor-body img',
         'div.news_cover_center img', 'div.news_text img',
@@ -508,7 +460,6 @@ def extract_image_from_page(soup, page_url=None):
         'div.b-shiki_editor img', 'div.shiki_editor img',
         'div.b-shiki_wall img'
     ]
-
     for selector in selectors:
         img_tag = soup.select_one(selector)
         if img_tag:
@@ -516,33 +467,27 @@ def extract_image_from_page(soup, page_url=None):
                    img_tag.get('data-original') or img_tag.get('data-lazy-src'))
             if src:
                 return make_absolute(src, page_url or 'https://shikimori.one')
-
     og_image = soup.select_one('meta[property="og:image"]')
     if og_image and og_image.get('content'):
         return make_absolute(og_image['content'], page_url or 'https://shikimori.one')
-
     for img in soup.find_all('img'):
         src = (img.get('src') or img.get('data-src') or
                img.get('data-original') or img.get('data-lazy-src'))
         if src and re.search(r'\.(jpg|jpeg|png|webp)(\?.*)?$', src, re.IGNORECASE):
             return make_absolute(src, page_url or 'https://shikimori.one')
-
     return None
 
 def fetch_image_url(entry, soup=None):
     link = entry.get('link')
     if soup is None and link:
         soup = get_page_soup(link)
-
     if soup:
         image = extract_image_from_page(soup, link)
         if image:
             return image
-
     image = extract_image_url_from_entry(entry)
     if image:
         return image
-
     print(f"Картинка не найдена для {link}")
     return None
 
@@ -554,7 +499,6 @@ def extract_image_url_from_entry(entry):
             base_domain = 'https://kg-portal.ru'
         elif 'shikimori.one' in link:
             base_domain = 'https://shikimori.one'
-
     if 'media_content' in entry:
         for media in entry.media_content:
             if 'url' in media:
@@ -613,7 +557,6 @@ def to_short_youtube_url(url):
 def extract_video_url_from_page(soup):
     if not soup:
         return None, False
-
     video_tag = soup.select_one('video')
     if video_tag:
         src = video_tag.get('src')
@@ -622,35 +565,29 @@ def extract_video_url_from_page(soup):
         source_tag = video_tag.select_one('source')
         if source_tag and source_tag.get('src') and re.search(r'\.(mp4|webm)(\?.*)?$', source_tag['src'], re.IGNORECASE):
             return source_tag['src'], False
-
     og_video = soup.select_one('meta[property="og:video"]')
     if og_video and og_video.get('content'):
         url = og_video['content']
         if re.search(r'\.(mp4|webm)(\?.*)?$', url, re.IGNORECASE):
             return url, False
-
     yt_tag = soup.select_one('editor-body-youtube')
     if yt_tag and yt_tag.get('url'):
         url = yt_tag['url']
         if is_youtube_video(url):
             return url, True
-
     iframe = soup.select_one('iframe[src*="youtube.com/embed"], iframe[src*="youtu.be/"]')
     if iframe and iframe.get('src'):
         return iframe['src'], True
-
     if og_video and og_video.get('content'):
         url = og_video['content']
         if is_youtube_video(url):
             return url, True
-
     for a in soup.select('div.b-video.youtube a.video-link, a.video-link[data-href*="youtube"], a.video-link[href*="youtube"]'):
         data_href = a.get('data-href') or a.get('href')
         if data_href:
             url = html.unescape(data_href)
             if is_youtube_video(url):
                 return url, True
-
     for a in soup.select('a.youtube'):
         href = a.get('href', '')
         match = re.search(r'url=([^&]+)', href)
@@ -658,7 +595,6 @@ def extract_video_url_from_page(soup):
             url = html.unescape(match.group(1))
             if is_youtube_video(url):
                 return url, True
-
     return None, False
 
 def fetch_video_info(entry, soup=None):
@@ -829,18 +765,13 @@ def extract_title_hashtag(title):
 def build_post_html(title, body, emoji='📄'):
     title_esc = escape_html(normalize_whitespace(title))
     body_formatted = format_news_body(body) if body else ""
-
     parts = [f"{emoji} <b>{title_esc}</b>"]
-
     if body_formatted:
         parts.append("┄┄┄ ✦ ┄┄┄")
         parts.append(body_formatted)
-
     hashtags = ["#аниме", "#новости"]
-
     parts.append("")
     parts.append("🏷️ " + " ".join(hashtags))
-
     return "\n".join(parts)
 
 def is_podcast_entry(entry):
@@ -871,7 +802,6 @@ def remove_duplicate_start(title, body):
 def rewrite_news(title, body, target_len=None):
     if not GIGACHAT_AUTHORIZATION_KEY:
         return title, body
-
     token = get_gigachat_token()
     if not token:
         return title, body
@@ -882,7 +812,6 @@ def rewrite_news(title, body, target_len=None):
     if target_len is None:
         target_len = max(300, min(source_len, 800))
 
-    # Инструкция по длине
     if source_len < 200:
         length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: ровно от 300 до 600 символов.
 Исходный текст очень короткий ({source_len} символов). 
@@ -948,20 +877,16 @@ def rewrite_news(title, body, target_len=None):
                 elif line.startswith('Текст:'):
                     new_body = line.replace('Текст:', '').strip()
 
-            # Если GigaChat вернул пустой или слишком короткий текст — пробуем ещё раз
             if not new_body or telegram_len(new_body) < 50:
                 print(f"[WARNING] Попытка {attempt+1}: GigaChat вернул слишком короткий ответ")
                 if attempt < 2:
                     continue
                 return title, body
 
-            # Проверка на плагиат (слишком похоже на оригинал)
             if is_too_similar(body_part, new_body, threshold=0.65):
                 print(f"[WARNING] Попытка {attempt+1}: Ответ слишком похож на оригинал")
                 if attempt < 2:
                     continue
-                # В крайнем случае возвращаем что есть
-                pass
 
             new_title = fix_quotes(new_title)
             new_title = fix_punctuation_spaces(new_title)
@@ -1038,7 +963,6 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
-    # Чистим заголовок и текст от дублей и ромадзи
     title = clean_duplicate_title(title)
     title = strip_romaji_title(title)
     body = clean_shikimori_links(body)
@@ -1075,7 +999,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     print(f"[DEBUG] Длина тела (UTF-16): {telegram_len(body)}")
     print(f"[DEBUG] Первые 200 символов тела:\n{body[:200]}")
     
-    # Safety net: если GigaChat недоступен/выключен, всё равно чистим ромадзи в оригинале
     title = strip_romaji_title(title)
     body = strip_romaji_title(body)
     body = clean_romaji_titles(body)
@@ -1100,8 +1023,9 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
 
     if video_url and is_youtube:
+        # YouTube — отправляем ссылку, НЕ скачиваем
         short_url = to_short_youtube_url(video_url)
-        message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
+        message_with_link = f"{full_message_long}\n\n🎬 Смотреть видео: {short_url}"
         bot.send_message(
             CHANNEL_ID,
             message_with_link[:4096],
@@ -1121,7 +1045,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
 
     bot.send_message(CHANNEL_ID, full_message_long[:4096], parse_mode='HTML', disable_web_page_preview=True)
 
-# ---------- ФУНКЦИЯ ДЛЯ ПАРСИНГА SHIKIMORI ----------
+# ---------- ПАРСИНГ SHIKIMORI ----------
 def fetch_shikimori_news_from_main_page():
     soup = get_page_soup(SHIKIMORI_MAIN)
     if not soup:
@@ -1173,10 +1097,76 @@ def main():
     links, titles = load_posted()
     recent_titles = load_recent_titles()
     new_posts = 0
+    
+    pending_news = load_pending()
+    
+    print(f"Загружено {len(links)} ссылок и {len(titles)} заголовков")
+    print(f"Максимум постов за запуск: {MAX_POSTS_PER_RUN}")
+    print(f"Отложенных новостей: {len(pending_news)}")
 
-    print("Обрабатываю новости Shikimori с главной страницы...")
+    # Публикуем отложенные новости
+    if pending_news:
+        print("Публикуем отложенные новости...")
+        for news in pending_news[:MAX_POSTS_PER_RUN]:
+            if new_posts >= MAX_POSTS_PER_RUN:
+                break
+                
+            link = news.get('link', '')
+            title = news.get('title', 'Без названия')
+            
+            if is_duplicate(link, title, links, titles):
+                print(f"Дубликат пропущен (отложенный): {title}")
+                continue
+                
+            soup = get_page_soup(link)
+            if not soup:
+                print(f"Не удалось загрузить страницу: {link}")
+                continue
+                
+            full_text = fetch_full_text({'link': link, 'title': title})
+            if full_text:
+                sentences = split_sentences(full_text.strip())
+                if sentences:
+                    title = normalize_whitespace(sentences[0])
+                    full_text = ' '.join(sentences[1:])
+                full_text = remove_duplicate_start(title, full_text)
+
+            if is_similar_news(title, full_text, recent_titles):
+                print(f"Похожая новость пропущена: {title}")
+                continue
+
+            image_url = news.get('image_url')
+            video_url, is_youtube = fetch_video_info({'link': link}, soup)
+
+            try:
+                send_post(title, full_text, link, image_url, video_url, is_youtube)
+                links.add(link)
+                titles.add(normalize_title(title))
+                recent_titles.append({"title": title, "timestamp": time.time()})
+                new_posts += 1
+                print(f"Опубликовано (отложенная): {title}")
+            except Exception as e:
+                print(f"Ошибка отправки для {link}: {e}")
+
+        if new_posts > 0:
+            pending_news = pending_news[new_posts:]
+            save_pending(pending_news)
+            print(f"Осталось отложенных новостей: {len(pending_news)}")
+
+    if new_posts >= MAX_POSTS_PER_RUN:
+        save_posted(links, titles)
+        save_recent_titles(recent_titles)
+        print(f"Достигнут лимит в {MAX_POSTS_PER_RUN} постов. Остальные будут в следующий раз.")
+        return
+
+    # ----- Shikimori -----
+    print("Обрабатываю новости Shikimori...")
     shikimori_news = fetch_shikimori_news_from_main_page()
     for news in shikimori_news:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            print(f"Достигнут лимит в {MAX_POSTS_PER_RUN} постов, остальные будут в следующий раз")
+            break
+            
         link = news['link']
         title = news['title']
         if is_duplicate(link, title, links, titles):
@@ -1184,6 +1174,10 @@ def main():
             continue
 
         soup = get_page_soup(link)
+        if not soup:
+            print(f"Не удалось загрузить страницу: {link}")
+            continue
+            
         full_text = fetch_full_text({'link': link, 'title': title})
 
         if full_text:
@@ -1224,7 +1218,17 @@ def main():
         except Exception as e:
             print(f"Ошибка отправки для {link}: {e}")
 
+    if new_posts >= MAX_POSTS_PER_RUN:
+        save_posted(links, titles)
+        save_recent_titles(recent_titles)
+        print(f"Достигнут лимит в {MAX_POSTS_PER_RUN} постов. Остальные будут в следующий раз.")
+        return
+
+    # ----- RSS -----
     for rss_url in RSS_URLS:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            break
+            
         print(f"Обрабатываю ленту: {rss_url}")
         try:
             feed = feedparser.parse(rss_url)
@@ -1232,7 +1236,10 @@ def main():
             print(f"Не удалось получить ленту {rss_url}: {e}")
             continue
 
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:20]:
+            if new_posts >= MAX_POSTS_PER_RUN:
+                break
+                
             if is_podcast_entry(entry):
                 print(f"Пропущен подкаст: {entry.get('title')}")
                 continue
@@ -1262,6 +1269,32 @@ def main():
                 print(f"Опубликовано: {title}")
             except Exception as e:
                 print(f"Ошибка отправки для {link}: {e}")
+
+    # Сохраняем оставшиеся новости как отложенные
+    remaining_news = []
+    
+    for news in shikimori_news:
+        if new_posts >= MAX_POSTS_PER_RUN:
+            if not is_duplicate(news['link'], news['title'], links, titles):
+                remaining_news.append(news)
+    
+    for rss_url in RSS_URLS:
+        try:
+            feed = feedparser.parse(rss_url)
+        except:
+            continue
+        for entry in feed.entries[:20]:
+            if new_posts >= MAX_POSTS_PER_RUN:
+                link = entry.get('link', '')
+                title = entry.get('title', 'Без названия')
+                if not is_duplicate(link, title, links, titles) and not is_podcast_entry(entry):
+                    remaining_news.append(entry)
+    
+    if remaining_news:
+        pending_news = load_pending()
+        pending_news.extend(remaining_news)
+        save_pending(pending_news)
+        print(f"Отложено {len(remaining_news)} новостей для следующего запуска. Всего в очереди: {len(pending_news)}")
 
     if new_posts > 0:
         save_posted(links, titles)
