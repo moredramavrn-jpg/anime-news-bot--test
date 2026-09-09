@@ -1,21 +1,21 @@
 import os
 import random
-import time
 import requests
 import urllib3
 import telebot
 from io import BytesIO
-from bs4 import BeautifulSoup
-from PIL import Image
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+VK_TOKEN = os.getenv("VK_TOKEN") # Добавили токен ВК
 
-PIKABU_SERIES_URLS = [
-    "https://pikabu.ru/series/anime_memyi_59562",
-    "https://pikabu.ru/series/podborki_randomnyikh_anime_memov_31394"
+# Сюда вписываем короткие адреса пабликов ВК (то, что после vk.com/)
+VK_DOMAINS = [
+    "animememes", 
+    "ruanime",
+    # Добавляй сюда любые открытые группы, каждое название в кавычках через запятую
 ]
 
 POSTED_IDS_FILE = "posted_memes.txt"
@@ -43,128 +43,83 @@ def save_last_type(meme_type):
     with open(LAST_TYPE_FILE, 'w', encoding='utf-8') as f:
         f.write(meme_type)
 
-def parse_posts(soup):
-    posts = []
-    for article in soup.select("article.story"):
-        post_id = article.get("data-story-id", "")
-
-        content = article.select_one(".story__content")
-        if content:
-            text_blocks = content.select(".story-block_type_text")
-            if text_blocks:
-                continue
-
-        title_tag = article.select_one("a.story__title-link")
-        title = title_tag.get_text(strip=True) if title_tag else "Без названия"
-        link = title_tag.get("href") if title_tag else ""
-
-        video_tag = article.select_one("video")
-        if video_tag:
-            video_url = None
-
-            source_tag = video_tag.select_one("source")
-            if source_tag:
-                video_url = source_tag.get("src")
-
-            if not video_url:
-                data_source = video_tag.get("data-source")
-                if data_source:
-                    if data_source.startswith("//"):
-                        data_source = "https:" + data_source
-                    if not data_source.endswith(".mp4"):
-                        video_url = data_source + ".mp4"
-                    else:
-                        video_url = data_source
-
-            if video_url and video_url.startswith("//"):
-                video_url = "https:" + video_url
-
-            if video_url:
-                posts.append({"id": post_id, "title": title, "link": link, "type": "video", "media_url": video_url})
-                continue
-
-        img_tag = article.select_one("img.story-image__image")
-        if img_tag:
-            img_url = (
-                img_tag.get("data-large-image") or
-                img_tag.get("data-src") or
-                img_tag.get("src")
-            )
-            if img_url and img_url.startswith("//"):
-                img_url = "https:" + img_url
-            if img_url:
-                posts.append({"id": post_id, "title": title, "link": link, "type": "image", "media_url": img_url})
-
-    return posts
-
-def get_all_posts_from_series(base_url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+def get_vk_posts(domain):
+    if not VK_TOKEN:
+        print("[ERROR] VK_TOKEN не найден!")
+        return []
+        
+    url = "https://api.vk.com/method/wall.get"
+    params = {
+        "domain": domain,
+        "count": 20, # Берем последние 20 постов со стены
+        "access_token": VK_TOKEN,
+        "v": "5.131"
     }
-    all_posts = []
-    page = 1
-    while True:
-        url = f"{base_url}?page={page}" if page > 1 else base_url
-        r = requests.get(url, headers=headers, timeout=20)
-        soup = BeautifulSoup(r.text, "lxml")
-        posts = parse_posts(soup)
-        if not posts:
-            break
-        all_posts.extend(posts)
-        print(f"Страница {page}: {len(posts)} постов")
-        page += 1
-        if page > 15:
-            break
-        time.sleep(1)
-    return all_posts
+    
+    try:
+        r = requests.get(url, params=params, timeout=20).json()
+    except Exception as e:
+        print(f"Ошибка запроса к ВК: {e}")
+        return []
+    
+    posts = []
+    for item in r.get("response", {}).get("items", []):
+        if item.get("is_pinned"): 
+            continue # Пропускаем закреп, он часто старый
+        
+        post_id = f"{item['owner_id']}_{item['id']}"
+        
+        # Берем только первую строчку текста для подписи
+        raw_text = item.get("text", "")
+        title = raw_text.split('\n')[0][:150].strip() if raw_text else "Без названия"
+        title = title.replace("#", "") # Убираем чужие хэштеги
+        
+        for attach in item.get("attachments", []):
+            if attach["type"] == "photo":
+                sizes = attach["photo"]["sizes"]
+                best_pic = max(sizes, key=lambda x: x.get("width", 0))
+                posts.append({"id": post_id, "title": title, "type": "image", "media_url": best_pic["url"]})
+                break # Берем только первое фото
+                
+            elif attach["type"] == "doc" and attach["doc"].get("ext") in ["gif", "mp4"]:
+                posts.append({"id": post_id, "title": title, "type": "video", "media_url": attach["doc"]["url"]})
+                break # Берем только первую гифку
+                
+    return posts
 
 def download_media(url):
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=20)
         r.raise_for_status()
         return BytesIO(r.content)
     except Exception as e:
-        print(f"Ошибка скачивания: {e}")
+        print(f"Ошибка скачивания медиа: {e}")
         return None
-
-def compress_image(image_bytes, max_width=1280):
-    try:
-        img = Image.open(image_bytes)
-        if img.width > max_width:
-            ratio = max_width / img.width
-            new_height = int(img.height * ratio)
-            img = img.resize((max_width, new_height), Image.LANCZOS)
-        output = BytesIO()
-        img.save(output, format="JPEG", quality=90)
-        output.seek(0)
-        return output
-    except Exception as e:
-        print(f"Ошибка сжатия: {e}")
-        return image_bytes
 
 def main():
     posted_ids = load_posted_ids()
     all_posts = []
 
-    for url in PIKABU_SERIES_URLS:
-        posts = get_all_posts_from_series(url)
+    for domain in VK_DOMAINS:
+        posts = get_vk_posts(domain)
         all_posts.extend(posts)
 
-    print(f"Всего собрано: {len(all_posts)}")
-
-    available = [p for p in all_posts if p["id"] not in posted_ids]
-    if not available:
-        print("Все мемы уже опубликованы")
+    # Убираем баяны (то, что уже постили)
+    all_posts = [p for p in all_posts if p["id"] not in posted_ids]
+    if not all_posts:
+        print("Нет новых мемов в ВК")
         return
 
     last_type = get_last_type()
     desired_type = "video" if last_type == "image" else "image"
 
-    filtered = [p for p in available if p["type"] == desired_type]
+    print(f"last_type = {last_type}, desired_type = {desired_type}")
+
+    filtered = [p for p in all_posts if p["type"] == desired_type]
     if not filtered:
-        print(f"Нет новых мемов типа {desired_type}, берём другой тип")
-        filtered = available
+        print(f"Нет мемов типа {desired_type}, берём любой")
+        filtered = all_posts  
 
     post = random.choice(filtered)
     print(f"Выбран пост: {post['title']} (тип: {post['type']})")
@@ -174,30 +129,20 @@ def main():
         print("Не удалось скачать медиа")
         return
 
-    if post["type"] == "video":
-        try:
-            bot.send_video(CHANNEL_ID, media_bytes, caption="#аниме #мем", timeout=60)
-        except Exception as e:
-            print(f"Ошибка отправки видео: {e}")
-            return
-    else:
-        compressed = compress_image(media_bytes)
-        caption = f"{post['title']}\n\n#аниме #мем"
-        try:
-            bot.send_photo(CHANNEL_ID, compressed, caption=caption, timeout=60)
-        except Exception as e:
-            print(f"Ошибка отправки фото: {e}")
-            return
+    # Формируем красивую подпись
+    caption = f"{post['title']}\n\n#аниме #мем" if post['title'] and post['title'] != "Без названия" else "#аниме #мем"
 
-    save_posted_id(post["id"])
-
-    if post["type"] == desired_type:
+    try:
+        if post["type"] == "video":
+            bot.send_video(CHANNEL_ID, media_bytes, caption=caption)
+        else:
+            bot.send_photo(CHANNEL_ID, media_bytes, caption=caption)
+        
+        save_posted_id(post["id"])
         save_last_type(post["type"])
-        print(f"Тип обновлён на {post['type']}")
-    else:
-        print("Тип не обновлён, в следующий раз снова попробуем нужный")
-
-    print("Мем опубликован.")
+        print("Мем опубликован.")
+    except Exception as e:
+        print(f"Ошибка отправки в Telegram: {e}")
 
 if __name__ == "__main__":
     main()
