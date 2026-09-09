@@ -3,6 +3,7 @@ import re
 import random
 import time
 import uuid
+import io
 import urllib3
 import telebot
 import requests
@@ -68,7 +69,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/6.0"
+        "User-Agent": "AnimeQuizBot/7.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -127,7 +128,7 @@ def is_answer_in_question(question, anime_name):
     return False
 
 # ==========================================
-# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (Shikimori + AnimeThemes)
+# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (Shikimori + AnimeThemes Аудио)
 # ==========================================
 
 def get_shikimori_info(anime_name):
@@ -159,12 +160,14 @@ def fetch_anime_image(anime_name):
         print(f"Ошибка получения кадра для '{anime_name}': {e}")
     return None
 
-def fetch_anime_opening(anime_name):
+def fetch_anime_audio(anime_name):
+    """Ищет только аудиодорожку (.ogg) опенинга через AnimeThemes"""
     _, romaji_name = get_shikimori_info(anime_name)
     search_query = romaji_name if romaji_name else anime_name
     
     try:
-        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos"
+        # Теперь запрашиваем include=audios вместо videos
+        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.audios"
         res = requests.get(url, timeout=20).json()
         
         if not res.get('anime'):
@@ -173,20 +176,16 @@ def fetch_anime_opening(anime_name):
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
         
-        MAX_SIZE = 45 * 1024 * 1024 
-        
         for op in ops:
             for entry in op.get('animethemeentries', []):
-                videos = entry.get('videos', [])
-                valid_videos = [v for v in videos if v.get('size', float('inf')) < MAX_SIZE]
-                
-                if valid_videos:
-                    valid_videos.sort(key=lambda x: x.get('size', 0))
-                    return valid_videos[0]['link']
+                audios = entry.get('audios', [])
+                if audios:
+                    # Возвращаем первую попавшуюся аудиодорожку
+                    return audios[0]['link']
                     
-        print(f"Для '{anime_name}' все опенинги слишком тяжелые (>45 МБ). Пропускаю видео.")
+        print(f"Для '{anime_name}' не найдено аудио.")
     except Exception as e:
-        print(f"Ошибка поиска опенинга для '{anime_name}': {e}")
+        print(f"Ошибка поиска аудио для '{anime_name}': {e}")
     return None
 
 # ==========================================
@@ -210,7 +209,7 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 # ==========================================
-# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ОПТИМИЗИРОВАННАЯ ЛОГИКА)
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ
 # ==========================================
 
 def generate_quiz_content(anime_name, token):
@@ -236,7 +235,7 @@ def generate_quiz_content(anime_name, token):
         },
         {
             "type": "угадай опенинг",
-            "media_type": "video"
+            "media_type": "audio" # Изменили тип на audio
         }
     ]
 
@@ -250,7 +249,7 @@ def generate_quiz_content(anime_name, token):
     for template in available:
         media_url = None
         
-        # 4.1 Быстрая генерация для Картинки
+        # 4.1 Картинка
         if template["media_type"] == "image":
             media_url = fetch_anime_image(anime_name)
             if not media_url: continue 
@@ -265,9 +264,9 @@ def generate_quiz_content(anime_name, token):
             save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
             return question, media_url, template["media_type"]
             
-        # 4.2 Быстрая генерация для Видео
-        elif template["media_type"] == "video":
-            media_url = fetch_anime_opening(anime_name)
+        # 4.2 Аудио
+        elif template["media_type"] == "audio":
+            media_url = fetch_anime_audio(anime_name)
             if not media_url: continue 
             
             question = random.choice([
@@ -280,7 +279,7 @@ def generate_quiz_content(anime_name, token):
             save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
             return question, media_url, template["media_type"]
             
-        # 4.3 Генерация Текста через ИИ с защитой от спойлеров
+        # 4.3 Текст
         else:
             for attempt in range(3):
                 raw_question = giga_request(template["prompt"], token, max_tokens=250)
@@ -310,19 +309,24 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
     try:
         media_msg = None
         
-        # Скачиваем и отправляем медиафайл
+        # Скачиваем и отправляем картинку
         if media_type == "image" and media_url:
             print("Скачиваю картинку...")
             img_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=20).content
             media_msg = bot.send_photo(chat_id=CHANNEL_ID, photo=img_data)
         
-        elif media_type == "video" and media_url:
-            print("Скачиваю видео опенинга...")
-            vid_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=60).content
-            print("Видео скачано. Отправляю в Telegram...")
-            media_msg = bot.send_video(chat_id=CHANNEL_ID, video=vid_data, supports_streaming=True)
+        # Скачиваем и отправляем аудио
+        elif media_type == "audio" and media_url:
+            print("Скачиваю аудио опенинга...")
+            audio_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
+            print("Аудио скачано. Отправляю в Telegram...")
+            
+            # Заворачиваем байты в виртуальный файл и даем нейтральное имя, чтобы не спойлерить ответ в названии трека
+            audio_file = io.BytesIO(audio_data)
+            audio_file.name = "opening_track.ogg"
+            media_msg = bot.send_audio(chat_id=CHANNEL_ID, audio=audio_file)
 
-        # Отправляем опрос (как ответ на медиа, если оно есть)
+        # Отправляем опрос (как ответ на медиа)
         reply_id = media_msg.message_id if media_msg else None
 
         bot.send_poll(
