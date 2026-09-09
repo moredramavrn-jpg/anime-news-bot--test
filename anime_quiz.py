@@ -7,6 +7,7 @@ import io
 import urllib3
 import telebot
 import requests
+import subprocess
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -70,7 +71,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/9.7"
+        "User-Agent": "AnimeQuizBot/9.8"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -114,7 +115,6 @@ def clean_question(text):
     text = re.sub(r'Ответ сгенерирован нейросетевой моделью.*?информация\.', '', text, flags=re.IGNORECASE | re.DOTALL)
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     if lines:
-        # ИСПРАВЛЕНИЕ ТУТ: склеиваем все строчки через пробел, чтобы не терять вопрос!
         question = " ".join(lines)
         question = re.sub(r'\.{3,}$', '', question).strip()
         return question
@@ -170,8 +170,7 @@ def fetch_anime_audio(anime_name):
         url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos.audio"
         res = requests.get(url, timeout=20).json()
         
-        if not res.get('anime'):
-            return None
+        if not res.get('anime'): return None
             
         themes = res['anime'][0]['animethemes']
         ops = [t for t in themes if t['type'] == 'OP']
@@ -185,6 +184,31 @@ def fetch_anime_audio(anime_name):
                         return audio['link']
     except Exception:
         pass
+    return None
+
+def fetch_anime_video(anime_name):
+    """Находит ссылку на видео (webm) опенинга или эндинга."""
+    _, romaji_name = get_shikimori_info(anime_name)
+    search_query = romaji_name if romaji_name else anime_name
+    
+    try:
+        url = f"https://api.animethemes.moe/anime?q={search_query}&include=animethemes.animethemeentries.videos"
+        res = requests.get(url, timeout=20).json()
+        
+        if not res.get('anime'): return None
+            
+        themes = res['anime'][0]['animethemes']
+        # Берем либо опенинг, либо эндинг для разнообразия
+        ops = [t for t in themes if t['type'] in ['OP', 'ED']]
+        
+        for op in ops:
+            for entry in op.get('animethemeentries', []):
+                videos = entry.get('videos', [])
+                for video in videos:
+                    if video.get('link'):
+                        return video['link']
+    except Exception as e:
+        print(f"[ERROR] Ошибка при поиске видео для {anime_name}: {e}")
     return None
 
 # ==========================================
@@ -212,7 +236,6 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 def get_base_name(name):
-    """Вычленяет чистое корневое название франшизы для фильтрации дублей."""
     base = name.lower()
     base = base.replace('re:zero', 'rezero')
     base = re.split(r':\s+| - | — |\.\s+', base)[0]
@@ -222,7 +245,6 @@ def get_base_name(name):
     return base.strip()
 
 def are_same_franchise(name1, name2):
-    """Проверяет, относятся ли два тайтла к одной франшизе."""
     b1 = get_base_name(name1)
     b2 = get_base_name(name2)
     if b1 == b2: return True
@@ -232,7 +254,6 @@ def are_same_franchise(name1, name2):
     return False
 
 def format_display_name(name):
-    """Очищает название для красивого показа в опросе (оставляет Re:Zero целым)."""
     base = name
     base = re.split(r':\s+| - | — |\.\s+', base)[0]
     base = re.sub(r'\s*\(\d{4}\)', '', base)
@@ -240,7 +261,7 @@ def format_display_name(name):
     return base.strip()
 
 # ==========================================
-# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ
 # ==========================================
 
 def generate_strict_quiz(search_name, display_name, token, target_media):
@@ -313,6 +334,19 @@ def generate_strict_quiz(search_name, display_name, token, target_media):
         save_last_value(LAST_QUIZ_TYPE_FILE, "угадай опенинг")
         return question, media_url
         
+    elif target_media == "video":
+        media_url = fetch_anime_video(search_name)
+        if not media_url: return None, None
+        
+        question = random.choice([
+            "Узнаете этот визуальный стиль? Откуда этот отрывок?",
+            "Напрягаем память! Из какого аниме этот видеоряд?",
+            "Сможете угадать тайтл по этому фрагменту?",
+            "Знакомые кадры? Откуда они?"
+        ])
+        save_last_value(LAST_QUIZ_TYPE_FILE, "угадай по видео")
+        return question, media_url
+        
     else: 
         last_type = load_last_value(LAST_QUIZ_TYPE_FILE)
         available = [t for t in question_templates if t["type"] != last_type]
@@ -360,6 +394,29 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
             audio_file = io.BytesIO(audio_data)
             audio_file.name = "opening_track.ogg"
             media_msg = bot.send_audio(chat_id=CHANNEL_ID, audio=audio_file)
+            
+        elif media_type == "video" and media_url:
+            print("[DEBUG] Скачиваю видео (.webm)...")
+            video_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=60).content
+            with open("temp.webm", "wb") as f:
+                f.write(video_data)
+                
+            print("[DEBUG] Конвертирую в .mp4 и вырезаю 15 секунд...")
+            # -ss 00:00:15 пропускает первые 15 сек (там обычно лого)
+            # -t 00:00:15 берет следующие 15 секунд (получается быстрый ролик для квиза)
+            subprocess.run([
+                "ffmpeg", "-y", "-i", "temp.webm", 
+                "-ss", "00:00:15", "-t", "00:00:15", 
+                "-c:v", "libx264", "-preset", "ultrafast", 
+                "-c:a", "aac", "temp.mp4"
+            ], check=True)
+            
+            with open("temp.mp4", "rb") as f:
+                media_msg = bot.send_video(chat_id=CHANNEL_ID, video=f)
+                
+            # Удаляем временные файлы
+            if os.path.exists("temp.webm"): os.remove("temp.webm")
+            if os.path.exists("temp.mp4"): os.remove("temp.mp4")
 
         reply_id = media_msg.message_id if media_msg else None
 
@@ -380,7 +437,7 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
 def main():
     all_anime = load_popular_anime()
     if len(all_anime) < 4:
-        print("[ERROR] Недостаточно названий в файле popular_anime.txt (нужно минимум 4)")
+        print("[ERROR] Недостаточно названий в файле popular_anime.txt")
         return
 
     token = get_gigachat_token()
@@ -391,7 +448,8 @@ def main():
     last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
     print(f"[DEBUG] Прошлый формат из файла: '{last_media}'")
     
-    sequence = {"text": "image", "image": "audio", "audio": "text"}
+    # Теперь у нас 4 формата по кругу!
+    sequence = {"text": "image", "image": "audio", "audio": "video", "video": "text"}
     target_media = sequence.get(last_media, "text")
     print(f"[DEBUG] Целевой формат на сейчас: '{target_media}'")
 
@@ -434,7 +492,7 @@ def main():
             print(f"[DEBUG] Аниме '{correct_anime}' не подошло для формата '{target_media}'. Ищу другое...")
 
     if not quiz_data:
-        print(f"[ERROR] Критическая ошибка: Не удалось создать викторину формата '{target_media}' за 10 попыток.")
+        print(f"[ERROR] Критическая ошибка: Не удалось создать викторину формата '{target_media}'")
         return
 
     final_correct, final_wrongs, question, media_url = quiz_data
