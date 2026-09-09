@@ -9,13 +9,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-VK_TOKEN = os.getenv("VK_TOKEN") # Добавили токен ВК
+VK_TOKEN = os.getenv("VK_TOKEN")
 
-# Сюда вписываем короткие адреса пабликов ВК (то, что после vk.com/)
+# Точно рабочие и открытые паблики с мемами
 VK_DOMAINS = [
-    "animememes", 
-    "ruanime",
-    # Добавляй сюда любые открытые группы, каждое название в кавычках через запятую
+    "anime_memes",
+    "animedebil",
+    "anime_shitt",
+    "anime.memes"
 ]
 
 POSTED_IDS_FILE = "posted_memes.txt"
@@ -51,13 +52,20 @@ def get_vk_posts(domain):
     url = "https://api.vk.com/method/wall.get"
     params = {
         "domain": domain,
-        "count": 20, # Берем последние 20 постов со стены
+        "count": 20,
         "access_token": VK_TOKEN,
         "v": "5.131"
     }
     
     try:
         r = requests.get(url, params=params, timeout=20).json()
+        
+        # --- ДЕБАГ: СМОТРИМ ЧТО ОТВЕТИЛ ВК ---
+        print(f"\n--- ОТВЕТ ОТ ПАБЛИКА {domain} ---")
+        print(r)
+        print("----------------------------------\n")
+        # -------------------------------------
+        
     except Exception as e:
         print(f"Ошибка запроса к ВК: {e}")
         return []
@@ -65,25 +73,24 @@ def get_vk_posts(domain):
     posts = []
     for item in r.get("response", {}).get("items", []):
         if item.get("is_pinned"): 
-            continue # Пропускаем закреп, он часто старый
+            continue
         
         post_id = f"{item['owner_id']}_{item['id']}"
         
-        # Берем только первую строчку текста для подписи
         raw_text = item.get("text", "")
         title = raw_text.split('\n')[0][:150].strip() if raw_text else "Без названия"
-        title = title.replace("#", "") # Убираем чужие хэштеги
+        title = title.replace("#", "")
         
         for attach in item.get("attachments", []):
             if attach["type"] == "photo":
                 sizes = attach["photo"]["sizes"]
                 best_pic = max(sizes, key=lambda x: x.get("width", 0))
                 posts.append({"id": post_id, "title": title, "type": "image", "media_url": best_pic["url"]})
-                break # Берем только первое фото
+                break
                 
             elif attach["type"] == "doc" and attach["doc"].get("ext") in ["gif", "mp4"]:
                 posts.append({"id": post_id, "title": title, "type": "video", "media_url": attach["doc"]["url"]})
-                break # Берем только первую гифку
+                break
                 
     return posts
 
@@ -105,7 +112,6 @@ def main():
         posts = get_vk_posts(domain)
         all_posts.extend(posts)
 
-    # Убираем баяны (то, что уже постили)
     all_posts = [p for p in all_posts if p["id"] not in posted_ids]
     if not all_posts:
         print("Нет новых мемов в ВК")
@@ -129,7 +135,6 @@ def main():
         print("Не удалось скачать медиа")
         return
 
-    # Формируем красивую подпись
     caption = f"{post['title']}\n\n#аниме #мем" if post['title'] and post['title'] != "Без названия" else "#аниме #мем"
 
     try:
