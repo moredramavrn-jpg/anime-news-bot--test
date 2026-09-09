@@ -370,6 +370,66 @@ def strip_romaji_title(text):
     text = pattern.sub(repl, text)
     return text
 
+def extract_russian_title_from_text(text):
+    """
+    Ищет в тексте первый русскоязычный заголовок или название в кавычках.
+    Используется, когда в заголовке новости только ромадзи/латиница.
+    """
+    if not text:
+        return None
+    
+    # Ищем первое название в кавычках «...» с русским текстом внутри
+    match = re.search(r'«([^»]*[А-Яа-я][^»]*)»', text)
+    if match:
+        russian_title = match.group(1).strip()
+        if len(russian_title) > 2:
+            return f'«{russian_title}»'
+    
+    # Ищем первое предложение, содержащее русские буквы (но не слишком длинное)
+    sentences = split_sentences(text)
+    for sent in sentences[:3]:  # Проверяем первые 3 предложения
+        # Если в предложении есть русские буквы и оно не слишком длинное
+        if re.search(r'[А-Яа-я]', sent) and len(sent) < 150:
+            # Проверяем, что это похоже на название
+            if re.search(r'[А-Я][а-я]+', sent):
+                return sent.strip()
+    
+    return None
+
+def clean_romaji_titles(text, title=None):
+    """
+    Очищает текст от длинных ромадзи-названий (стена латиницы),
+    оставляя только русский перевод.
+    
+    Если передан title, пытается восстановить русский заголовок из текста.
+    """
+    if not text:
+        return text
+    
+    # 1. Убираем длинные латинские названия, за которыми сразу идёт русский перевод
+    # Паттерн: длинная латиница (10+ символов) + сразу русский текст без пробела
+    pattern = r'[A-Za-z0-9\s\'\-]{10,}([А-Яа-я][^«»\n]{5,})'
+    text = re.sub(pattern, r'\1', text)
+    
+    # 2. Убираем латинские названия в кавычках, если сразу после них идёт русское
+    # Например: «Kyouka Point»«Точка усиления» -> «Точка усиления»
+    pattern = r'«[A-Za-z0-9\s\'\-]+»\s*«([^»]*[А-Яа-я][^»]*)»'
+    text = re.sub(pattern, r'«\1»', text)
+    
+    # 3. Убираем одиночные длинные латинские слова в кавычках, если они не содержат русских букв
+    pattern = r'«[A-Za-z0-9\s\'\-]{10,}»'
+    text = re.sub(pattern, '', text)
+    
+    # 4. Если передан заголовок и он состоит только из латиницы/ромадзи
+    if title and not re.search(r'[А-Яа-я]', title):
+        # Пробуем найти русский перевод в тексте
+        russian_title = extract_russian_title_from_text(text)
+        if russian_title:
+            # Возвращаем новый заголовок и очищенный текст
+            return russian_title, text
+    
+    return text
+
 def clean_duplicate_title(title):
     """Убирает дублирование в заголовке"""
     if not title:
@@ -402,6 +462,7 @@ def fetch_full_text(entry):
                     full_text = collapse_repeated_phrases(full_text)
                     full_text = clean_shikimori_links(full_text)
                     full_text = strip_romaji_title(full_text)
+                    full_text = clean_romaji_titles(full_text)
                     full_text = re.sub(r'^([^.!?]+)\s+\1\s*', r'\1 ', full_text, flags=re.IGNORECASE)
                     return full_text
         summary = entry.get('summary', '') or entry.get('description', '')
@@ -417,6 +478,7 @@ def fetch_full_text(entry):
                 full_text = collapse_repeated_phrases(full_text)
                 full_text = clean_shikimori_links(full_text)
                 full_text = strip_romaji_title(full_text)
+                full_text = clean_romaji_titles(full_text)
                 return full_text
     summary = entry.get('summary', '') or entry.get('description', '')
     if summary:
@@ -910,6 +972,7 @@ def rewrite_news(title, body, target_len=None):
         new_body = fix_punctuation_spaces(new_body)
         new_body = remove_garbage_lines(new_body)
         new_body = strip_romaji_title(new_body)
+        new_body = clean_romaji_titles(new_body)
 
         new_body = remove_duplicate_start(new_title, new_body)
 
@@ -972,11 +1035,20 @@ def build_caption_fit(title, body, emoji, max_len=1024):
     return f"{emoji} <b>{escape_html(title)}</b>\n{separator_plain}\n{truncated_body}\n\n🏷️ {tags_str}"
 
 def send_post(title, body, link, image_url, video_url, is_youtube):
-    # Чистим заголовок и текст от дублей и оригинальных ромадзи-названий
+    # Чистим заголовок и текст от дублей и ромадзи
     title = clean_duplicate_title(title)
     title = strip_romaji_title(title)
     body = clean_shikimori_links(body)
     body = strip_romaji_title(body)
+    
+    # Очищаем от длинных ромадзи-названий и пытаемся восстановить заголовок
+    clean_result = clean_romaji_titles(body, title)
+    if isinstance(clean_result, tuple):
+        # Если функция вернула кортеж (новый заголовок, очищенный текст)
+        title, body = clean_result
+    else:
+        # Если вернула только текст
+        body = clean_result
 
     if video_url and is_youtube:
         emoji = '🎬'
@@ -999,6 +1071,7 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     # Safety net: если GigaChat недоступен/выключен, всё равно чистим ромадзи в оригинале
     title = strip_romaji_title(title)
     body = strip_romaji_title(body)
+    body = clean_romaji_titles(body)
 
     full_message_long = build_post_html(title, body, emoji)
     caption_message = None
@@ -1020,8 +1093,6 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
             return
 
     if video_url and is_youtube:
-        # Видео не скачиваем — сразу отправляем текстом со ссылкой на YouTube.
-        # Telegram сам подтянет превью с плеером по ссылке.
         short_url = to_short_youtube_url(video_url)
         message_with_link = f"{full_message_long}\n\nСмотреть: {short_url}"
         bot.send_message(
@@ -1112,6 +1183,13 @@ def main():
             full_text = collapse_repeated_phrases(full_text)
             full_text = clean_shikimori_links(full_text)
             full_text = strip_romaji_title(full_text)
+            full_text = clean_romaji_titles(full_text)
+            
+            # Пытаемся восстановить русский заголовок из текста
+            russian_title = extract_russian_title_from_text(full_text)
+            if russian_title and not re.search(r'[А-Яа-я]', title):
+                title = russian_title
+            
             sentences = split_sentences(full_text.strip())
             if sentences:
                 title = normalize_whitespace(sentences[0])
