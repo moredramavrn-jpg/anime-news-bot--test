@@ -25,6 +25,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
         run: python anime_meme.py
 
       - name: Commit changes
