@@ -1,1 +1,1 @@
-video
+text_char
