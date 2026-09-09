@@ -60,7 +60,6 @@ def get_gigachat_token():
             print(f"Попытка {attempt + 1}: Ошибка получения токена GigaChat: {e}")
             time.sleep(3)
             
-    print("Не удалось получить токен после 3 попыток.")
     return None
 
 def giga_request(prompt, token, max_tokens=300):
@@ -69,7 +68,7 @@ def giga_request(prompt, token, max_tokens=300):
         "Content-Type": "application/json",
         "X-Request-ID": str(uuid.uuid4()),
         "X-Session-ID": str(uuid.uuid4()),
-        "User-Agent": "AnimeQuizBot/8.0"
+        "User-Agent": "AnimeQuizBot/9.0"
     }
     payload = {
         "model": "GigaChat-3-Ultra",
@@ -128,7 +127,7 @@ def is_answer_in_question(question, anime_name):
     return False
 
 # ==========================================
-# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ (Shikimori + AnimeThemes Аудио)
+# 2. ПОЛУЧЕНИЕ МЕДИАФАЙЛОВ
 # ==========================================
 
 def get_shikimori_info(anime_name):
@@ -156,8 +155,8 @@ def fetch_anime_image(anime_name):
         if res and isinstance(res, list) and len(res) > 0:
             pic = random.choice(res)
             return "https://shikimori.one" + pic['original']
-    except Exception as e:
-        print(f"Ошибка получения кадра для '{anime_name}': {e}")
+    except Exception:
+        pass
     return None
 
 def fetch_anime_audio(anime_name):
@@ -179,10 +178,8 @@ def fetch_anime_audio(anime_name):
                 audios = entry.get('audios', [])
                 if audios:
                     return audios[0]['link']
-                    
-        print(f"Для '{anime_name}' не найдено аудио.")
-    except Exception as e:
-        print(f"Ошибка поиска аудио для '{anime_name}': {e}")
+    except Exception:
+        pass
     return None
 
 # ==========================================
@@ -206,10 +203,10 @@ def load_popular_anime():
         return [line.strip() for line in f if line.strip()]
 
 # ==========================================
-# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (СТРОГАЯ ОЧЕРЕДЬ)
+# 4. ГЕНЕРАЦИЯ ВОПРОСОВ (ЖЕСТКОЕ ЧЕРЕДОВАНИЕ)
 # ==========================================
 
-def generate_quiz_content(anime_name, token):
+def generate_strict_quiz(anime_name, token, target_media):
     question_templates = [
         {
             "type": "плохое описание сюжета",
@@ -225,81 +222,58 @@ def generate_quiz_content(anime_name, token):
             "type": "три ассоциации",
             "media_type": "text",
             "prompt": f"Выбери 3 уникальных слова-ассоциации (предметы, термины — НЕ имена), которые указывают на аниме «{anime_name}». Формат: 'Три слова: [Слово 1], [Слово 2], [Слово 3]. О каком аниме речь?'"
-        },
-        {
-            "type": "угадай по кадру",
-            "media_type": "image"
-        },
-        {
-            "type": "угадай опенинг",
-            "media_type": "audio"
         }
     ]
 
-    last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
-    
-    # Строгий порядок: текст -> картинка -> аудио -> текст...
-    sequence = {"text": "image", "image": "audio", "audio": "text"}
-    target_media = sequence.get(last_media, "text")
-
-    # Разделяем шаблоны: сначала пытаемся взять целевой формат
-    target_templates = [t for t in question_templates if t["media_type"] == target_media]
-    fallback_templates = [t for t in question_templates if t["media_type"] != target_media]
-
-    random.shuffle(target_templates)
-    random.shuffle(fallback_templates)
-    
-    # Формируем итоговую очередь попыток (если нужный формат сломается, пойдут запасные)
-    available = target_templates + fallback_templates
-    
-    for template in available:
-        media_url = None
+    if target_media == "image":
+        media_url = fetch_anime_image(anime_name)
+        if not media_url: return None, None 
         
-        if template["media_type"] == "image":
-            media_url = fetch_anime_image(anime_name)
-            if not media_url: continue 
+        question = random.choice([
+            "Один взгляд на эту рисовку, и всё ясно! Откуда этот кадр?",
+            "Настоящий отаку узнает этот момент из тысячи. Что за аниме?",
+            "Проверим зрительную память! Из какого тайтла этот скриншот?",
+            "К какому аниме принадлежит этот кадр?"
+        ])
+        save_last_value(LAST_QUIZ_TYPE_FILE, "угадай по кадру")
+        return question, media_url
+        
+    elif target_media == "audio":
+        media_url = fetch_anime_audio(anime_name)
+        if not media_url: return None, None 
+        
+        question = random.choice([
+            "Узнаете эти ноты с первых секунд? Из какого аниме опенинг?",
+            "Этот трек точно есть в вашем плейлисте! Откуда он?",
+            "Слушаем и угадываем! В каком тайтле звучит эта песня?",
+            "Легендарный опенинг! Сможете назвать аниме?"
+        ])
+        save_last_value(LAST_QUIZ_TYPE_FILE, "угадай опенинг")
+        return question, media_url
+        
+    else: # Текст
+        last_type = load_last_value(LAST_QUIZ_TYPE_FILE)
+        available = [t for t in question_templates if t["type"] != last_type]
+        if not available:
+            available = question_templates
             
-            question = random.choice([
-                "Один взгляд на эту рисовку, и всё ясно! Откуда этот кадр?",
-                "Настоящий отаку узнает этот момент из тысячи. Что за аниме?",
-                "Проверим зрительную память! Из какого тайтла этот скриншот?",
-                "К какому аниме принадлежит этот кадр?"
-            ])
-            save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
-            save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
-            return question, media_url, template["media_type"]
+        template = random.choice(available)
+        
+        for attempt in range(3):
+            raw_question = giga_request(template["prompt"], token, max_tokens=250)
+            question = clean_question(raw_question)
             
-        elif template["media_type"] == "audio":
-            media_url = fetch_anime_audio(anime_name)
-            if not media_url: continue 
-            
-            question = random.choice([
-                "Узнаете эти ноты с первых секунд? Из какого аниме опенинг?",
-                "Этот трек точно есть в вашем плейлисте! Откуда он?",
-                "Слушаем и угадываем! В каком тайтле звучит эта песня?",
-                "Легендарный опенинг! Сможете назвать аниме?"
-            ])
-            save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
-            save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
-            return question, media_url, template["media_type"]
-            
-        else:
-            for attempt in range(3):
-                raw_question = giga_request(template["prompt"], token, max_tokens=250)
-                question = clean_question(raw_question)
-                
-                if question and not is_answer_in_question(question, anime_name):
-                    save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
-                    save_last_value(LAST_MEDIA_TYPE_FILE, template["media_type"])
-                    return question, media_url, template["media_type"]
-                else:
-                    print(f"Попытка {attempt + 1}: Пустой ответ или спойлер в тексте. Ждем 3 секунды...")
-                    time.sleep(3)
+            if question and not is_answer_in_question(question, anime_name):
+                save_last_value(LAST_QUIZ_TYPE_FILE, template["type"])
+                return question, None
+            else:
+                print(f"Попытка {attempt + 1}: Пустой ответ или спойлер в тексте. Ждем 3 секунды...")
+                time.sleep(3)
 
-    return None, None, None
+    return None, None
 
 # ==========================================
-# 5. ОТПРАВКА
+# 5. ОТПРАВКА И ГЛАВНЫЙ ЦИКЛ
 # ==========================================
 
 def send_quiz_poll(question_text, options, correct_index, media_url=None, media_type="text"):
@@ -320,7 +294,6 @@ def send_quiz_poll(question_text, options, correct_index, media_url=None, media_
         elif media_type == "audio" and media_url:
             print("Скачиваю аудио опенинга...")
             audio_data = requests.get(media_url, headers={"User-Agent": "AnimeQuizBot"}, timeout=30).content
-            print("Аудио скачано. Отправляю в Telegram...")
             
             audio_file = io.BytesIO(audio_data)
             audio_file.name = "opening_track.ogg"
@@ -353,26 +326,42 @@ def main():
         print("Не удалось получить токен GigaChat")
         return
 
-    correct_anime = random.choice(all_anime)
-    wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
-    
-    if len(wrong_pool) < 3:
-        print("Недостаточно названий для вариантов ответов.")
-        return
-        
-    wrong_answers = random.sample(wrong_pool, 3)
+    # Определяем, какой формат нам нужен СЕЙЧАС (строгое чередование)
+    last_media = load_last_value(LAST_MEDIA_TYPE_FILE)
+    sequence = {"text": "image", "image": "audio", "audio": "text"}
+    target_media = sequence.get(last_media, "text")
+    print(f"Целевой формат викторины: {target_media}")
 
-    question, media_url, media_type = generate_quiz_content(correct_anime, token)
-    
-    if not question:
-        print("Не удалось сгенерировать корректный вопрос.")
+    # Бот делает до 10 попыток найти аниме, которое поддерживает нужный формат
+    quiz_data = None
+    for attempt in range(10):
+        correct_anime = random.choice(all_anime)
+        wrong_pool = [a for a in all_anime if a.lower() != correct_anime.lower()]
+        if len(wrong_pool) < 3: continue
+        wrong_answers = random.sample(wrong_pool, 3)
+
+        question, media_url = generate_strict_quiz(correct_anime, token, target_media)
+        
+        if question:
+            quiz_data = (correct_anime, wrong_answers, question, media_url)
+            break
+        else:
+            print(f"Аниме '{correct_anime}' не подошло для формата {target_media}. Ищу другое...")
+
+    if not quiz_data:
+        print(f"Критическая ошибка: Не удалось создать викторину формата {target_media} за 10 попыток.")
         return
+
+    correct_anime, wrong_answers, question, media_url = quiz_data
 
     options = [correct_anime] + wrong_answers
     random.shuffle(options)
     correct_index = options.index(correct_anime)
 
-    send_quiz_poll(question, options, correct_index, media_url, media_type)
+    send_quiz_poll(question, options, correct_index, media_url, target_media)
+    
+    # Сохраняем формат ТОЛЬКО после успешной отправки, чтобы цепочка не сбивалась
+    save_last_value(LAST_MEDIA_TYPE_FILE, target_media)
 
 if __name__ == "__main__":
     main()
