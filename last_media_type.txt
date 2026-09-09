@@ -1,1 +1,1 @@
-text_char
+text
