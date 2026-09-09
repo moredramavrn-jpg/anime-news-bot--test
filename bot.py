@@ -52,6 +52,22 @@ def split_sentences(text):
         return []
     return re.split(r'(?<![A-ZА-Я]\.)(?<=[.!?])\s+', text)
 
+# ---------- Проверка на слишком похожий текст (плагиат) ----------
+def is_too_similar(original, rewritten, threshold=0.65):
+    """Проверяет, не скопировал ли GigaChat текст слишком близко к оригиналу"""
+    if not original or not rewritten:
+        return True
+    # Убираем знаки препинания и приводим к нижнему регистру
+    o = re.sub(r'[^\w\s]', '', original.lower())
+    r = re.sub(r'[^\w\s]', '', rewritten.lower())
+    # Разбиваем на слова
+    o_words = set(o.split())
+    r_words = set(r.split())
+    if not o_words:
+        return True
+    overlap = len(o_words & r_words) / len(o_words)
+    return overlap > threshold
+
 # ---------- Работа с опубликованными ----------
 def normalize_title(title):
     return re.sub(r'[^\w]', '', title.lower())
@@ -387,10 +403,8 @@ def extract_russian_title_from_text(text):
     
     # Ищем первое предложение, содержащее русские буквы (но не слишком длинное)
     sentences = split_sentences(text)
-    for sent in sentences[:3]:  # Проверяем первые 3 предложения
-        # Если в предложении есть русские буквы и оно не слишком длинное
+    for sent in sentences[:3]:
         if re.search(r'[А-Яа-я]', sent) and len(sent) < 150:
-            # Проверяем, что это похоже на название
             if re.search(r'[А-Я][а-я]+', sent):
                 return sent.strip()
     
@@ -407,12 +421,10 @@ def clean_romaji_titles(text, title=None):
         return text
     
     # 1. Убираем длинные латинские названия, за которыми сразу идёт русский перевод
-    # Паттерн: длинная латиница (10+ символов) + сразу русский текст без пробела
     pattern = r'[A-Za-z0-9\s\'\-]{10,}([А-Яа-я][^«»\n]{5,})'
     text = re.sub(pattern, r'\1', text)
     
     # 2. Убираем латинские названия в кавычках, если сразу после них идёт русское
-    # Например: «Kyouka Point»«Точка усиления» -> «Точка усиления»
     pattern = r'«[A-Za-z0-9\s\'\-]+»\s*«([^»]*[А-Яа-я][^»]*)»'
     text = re.sub(pattern, r'«\1»', text)
     
@@ -422,10 +434,8 @@ def clean_romaji_titles(text, title=None):
     
     # 4. Если передан заголовок и он состоит только из латиницы/ромадзи
     if title and not re.search(r'[А-Яа-я]', title):
-        # Пробуем найти русский перевод в тексте
         russian_title = extract_russian_title_from_text(text)
         if russian_title:
-            # Возвращаем новый заголовок и очищенный текст
             return russian_title, text
     
     return text
@@ -870,125 +880,118 @@ def rewrite_news(title, body, target_len=None):
     source_len = telegram_len(body_part)
 
     if target_len is None:
-        target_len = source_len
+        target_len = max(300, min(source_len, 800))
 
-    needs_compression = source_len > target_len * 1.1
-
-    if needs_compression:
-        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: примерно {target_len} символов (можно на 10-15% меньше, но не больше).
-Оригинал длиннее цели, поэтому нужно СОКРАТИТЬ текст — но не механической обрезкой, а умным пересказом:
-убери второстепенные детали и подробности, оставь только главную суть, ключевые факты, даты, имена и названия.
-Текст ОБЯЗАТЕЛЬНО должен быть завершённым: заканчиваться полным предложением с точкой, доводить мысль до конца.
-Никогда не обрывай текст на середине предложения или мысли — лучше выбрось менее важную деталь целиком,
-чем оставить незаконченную фразу."""
+    # Инструкция по длине
+    if source_len < 200:
+        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: ровно от 300 до 600 символов.
+Исходный текст очень короткий ({source_len} символов). 
+РАСКРОЙ тему — добавь контекст, объясни, о чём новость, но НЕ ПРИДУМЫВАЙ факты."""
     else:
-        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: примерно {target_len} символов, плюс-минус немного.
-Не сокращай текст искусственно и не выбрасывай детали без необходимости — просто перескажи своими словами
-примерно того же объёма. Текст должен заканчиваться полным, законченным предложением."""
+        length_instruction = f"""ЦЕЛЕВАЯ ДЛИНА: примерно {target_len} символов (можно на 10% меньше, но не больше).
+ПЕРЕСКАЖИ своими словами — не копируй исходный текст дословно."""
 
-    prompt = f"""Ты — опытный журналист новостного портала об аниме. Перепиши текст новости своими словами,
-как будто пишешь для своей редакции — живо, естественно, без канцелярита и без ощущения, что текст писала нейросеть.
+    prompt = f"""Ты — опытный журналист новостного портала об аниме. Перепиши текст новости СВОИМИ СЛОВАМИ,
+как будто ты рассказываешь новость другу — живо, естественно, без канцелярита.
 
 {length_instruction}
 
-НАЗВАНИЯ АНИМЕ И ПЕРСОНАЖЕЙ — ТОЛЬКО НА РУССКОМ:
-- Если в исходном тексте название сначала даётся на японском/английском/ромадзи, а затем в скобках приведён
-  русский перевод — используй ТОЛЬКО русский перевод, и в заголовке, и в тексте.
-- НИКОГДА не пиши оригинальное название на латинице или ромадзи (например, "Tsuihou sareta Cheat Fuyo
-  Majutsushi") — ни в кавычках, ни в скобках, ни отдельно. Это делает пост нечитаемым для русскоязычной аудитории.
-- Если у тайтла нет очевидного русского перевода в источнике — оставь только его устоявшееся русское или
-  адаптированное название, но не приводи оригинал на латинице.
-- Названия студий и англоязычные имена собственные (например, P.A. Works, Kadokawa), которые обычно не
-  переводятся, оставляй как есть — они не относятся к названиям тайтлов и запрет их не касается.
-
-СТИЛЬ — ПИШИ КАК ЖИВОЙ ЧЕЛОВЕК:
-- Пиши так, как обычный человек рассказывает интересную новость другу: простыми, естественными фразами.
-- Варьируй начала предложений и абзацев — не начинай два абзаца подряд одинаковой конструкцией.
-- Используй разную длину предложений: где-то короткое и хлёсткое, где-то развёрнутое.
-- Сохраняй все факты, даты и цифры ТОЧНО как в оригинале — здесь нельзя ошибаться.
-- Используй кавычки «» для названий и цитат.
-- Разбивай текст на абзацы по 2 предложения (если это не нарушает смысл).
-
-ЖЁСТКО ЗАПРЕЩЕНО — так пишут нейросети, а не журналисты, никогда не используй:
-- Канцелярские и вводные штампы: «стоит отметить», «важно отметить», «следует сказать», «таким образом»,
-  «в заключение», «необходимо подчеркнуть», «нельзя не отметить», «отдельно стоит сказать».
-- Слова-паразиты нейросетей: «безусловно», «несомненно», «в целом», «в общем и целом», «более того»,
-  «примечательно, что», «интересно, что», «стоит также упомянуть».
-- Однотипные вводные конструкции в начале двух и более абзацев подряд (например, два абзаца, начинающихся с «Также»).
-- Риторические вопросы, обращения к читателю («как думаете?», «согласны?»).
-- Собственное мнение, оценки, домыслы, предположения, которых нет в оригинале.
-- Штампованные метафоры и клише («настоящий подарок для фанатов», «не оставит равнодушным»).
-
-Заголовок должен быть конкретным и по существу, без кликбейта и без придуманных деталей, только на русском.
+ПРАВИЛА:
+1. НЕ КОПИРУЙ исходный текст — перескажи его СВОИМИ СЛОВАМИ.
+2. Используй другие формулировки, синонимы, меняй структуру предложений.
+3. Сохраняй ВСЕ факты, даты, имена и цифры ТОЧНО.
+4. Твой ответ должен быть законченным — последнее предложение заканчивается точкой.
+5. Названия аниме и персонажей — ТОЛЬКО на русском (если есть перевод).
+6. Пиши как живой человек, а не как робот.
 
 Заголовок: {title}
 
-Текст: {body_part}
+Исходный текст: {body_part}
 
-Выведи результат СТРОГО в формате, без пояснений от себя:
-Заголовок: <новый заголовок>
-Текст: <новый текст>
+Выведи результат СТРОГО в формате:
+Заголовок: <твой пересказ заголовка>
+Текст: <твой пересказ текста>
 """
-    try:
-        response = requests.post(
-            "https://api.giga.chat/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "X-Request-ID": str(uuid.uuid4()),
-                "X-Session-ID": str(uuid.uuid4()),
-                "User-Agent": "AnimeNewsBot/1.0"
-            },
-            json={
-                "model": "GigaChat-3-Ultra",
-                "messages": [
-                    {"role": "system", "content": "Ты — опытный редактор аниме-новостей, который пишет живым человеческим языком, а не канцеляритом, и всегда пишет названия тайтлов только по-русски, без оригинала на латинице/ромадзи. Ты всегда укладываешься в заданную длину текста и всегда доводишь мысль до конца, не обрывая текст на полуслове."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.6,
-                "max_tokens": min(4000, max(800, target_len + 400))
-            },
-            timeout=30,
-            verify=False
-        )
-        response.raise_for_status()
-        data = response.json()
-        generated_text = data["choices"][0]["message"]["content"].strip()
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                "https://api.giga.chat/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "X-Request-ID": str(uuid.uuid4()),
+                    "X-Session-ID": str(uuid.uuid4()),
+                    "User-Agent": "AnimeNewsBot/1.0"
+                },
+                json={
+                    "model": "GigaChat-3-Ultra",
+                    "messages": [
+                        {"role": "system", "content": "Ты — редактор аниме-новостей. Твоя задача — пересказывать новости СВОИМИ СЛОВАМИ, делая текст уникальным и живым, но сохраняя все факты."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": min(2000, max(500, target_len + 400))
+                },
+                timeout=30,
+                verify=False
+            )
+            response.raise_for_status()
+            data = response.json()
+            generated_text = data["choices"][0]["message"]["content"].strip()
 
-        new_title = title
-        new_body = body
-        for line in generated_text.split('\n'):
-            line = line.strip()
-            if line.startswith('Заголовок:'):
-                new_title = line.replace('Заголовок:', '').strip()
-            elif line.startswith('Текст:'):
-                new_body = line.replace('Текст:', '').strip()
+            new_title = title
+            new_body = body
+            for line in generated_text.split('\n'):
+                line = line.strip()
+                if line.startswith('Заголовок:'):
+                    new_title = line.replace('Заголовок:', '').strip()
+                elif line.startswith('Текст:'):
+                    new_body = line.replace('Текст:', '').strip()
 
-        new_title = fix_quotes(new_title)
-        new_title = fix_punctuation_spaces(new_title)
-        new_title = strip_romaji_title(new_title)
-        new_body = clean_and_paragraph(new_body)
-        new_body = fix_quotes(new_body)
-        new_body = fix_punctuation_spaces(new_body)
-        new_body = remove_garbage_lines(new_body)
-        new_body = strip_romaji_title(new_body)
-        new_body = clean_romaji_titles(new_body)
-
-        new_body = remove_duplicate_start(new_title, new_body)
-
-        if new_title and new_body:
-            new_len = telegram_len(new_body)
-            print(f"GigaChat вернул новый заголовок: {new_title[:50]}...")
-            print(f"[DEBUG] Длина после рерайта: {new_len}, цель: {target_len}, исходник: {source_len}")
-            if new_len > target_len * 1.25 or new_len < target_len * 0.5:
-                print(f"[WARNING] Длина рерайта сильно отклоняется от цели, используем оригинальный текст")
+            # Если GigaChat вернул пустой или слишком короткий текст — пробуем ещё раз
+            if not new_body or telegram_len(new_body) < 50:
+                print(f"[WARNING] Попытка {attempt+1}: GigaChat вернул слишком короткий ответ")
+                if attempt < 2:
+                    continue
                 return title, body
-            return new_title, new_body
-        else:
-            return title, body
-    except Exception as e:
-        print(f"Ошибка при рерайте через GigaChat: {e}")
-        return title, body
+
+            # Проверка на плагиат (слишком похоже на оригинал)
+            if is_too_similar(body_part, new_body, threshold=0.65):
+                print(f"[WARNING] Попытка {attempt+1}: Ответ слишком похож на оригинал")
+                if attempt < 2:
+                    continue
+                # В крайнем случае возвращаем что есть
+                pass
+
+            new_title = fix_quotes(new_title)
+            new_title = fix_punctuation_spaces(new_title)
+            new_title = strip_romaji_title(new_title)
+            new_body = clean_and_paragraph(new_body)
+            new_body = fix_quotes(new_body)
+            new_body = fix_punctuation_spaces(new_body)
+            new_body = remove_garbage_lines(new_body)
+            new_body = strip_romaji_title(new_body)
+            new_body = clean_romaji_titles(new_body)
+
+            new_body = remove_duplicate_start(new_title, new_body)
+
+            new_len = telegram_len(new_body)
+            print(f"[DEBUG] Длина после рерайта: {new_len}, цель: {target_len}")
+            
+            if new_title and new_body:
+                return new_title, new_body
+            else:
+                if attempt < 2:
+                    continue
+                return title, body
+                
+        except Exception as e:
+            print(f"Ошибка при рерайте через GigaChat (попытка {attempt+1}): {e}")
+            if attempt < 2:
+                continue
+    
+    print("[ERROR] Не удалось получить корректный ответ от GigaChat после 3 попыток")
+    return title, body
 
 def build_caption_fit(title, body, emoji, max_len=1024):
     title = normalize_whitespace(title)
@@ -1041,13 +1044,10 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     body = clean_shikimori_links(body)
     body = strip_romaji_title(body)
     
-    # Очищаем от длинных ромадзи-названий и пытаемся восстановить заголовок
     clean_result = clean_romaji_titles(body, title)
     if isinstance(clean_result, tuple):
-        # Если функция вернула кортеж (новый заголовок, очищенный текст)
         title, body = clean_result
     else:
-        # Если вернула только текст
         body = clean_result
 
     if video_url and is_youtube:
@@ -1062,12 +1062,19 @@ def send_post(title, body, link, image_url, video_url, is_youtube):
     has_media = bool(image_url) or bool(video_url and not is_youtube)
     max_len_for_post = 1024 if has_media else 4096
     shell_reserve = telegram_len(title) + 90
-    target_len = max(150, max_len_for_post - shell_reserve)
+    target_len = max(300, max_len_for_post - shell_reserve)
 
-    print(f"[DEBUG] Текст ДО рерайта: {telegram_len(body)} символов, целевая длина: {target_len}")
+    print(f"\n[DEBUG] === ПЕРЕД РЕРАЙТОМ ===")
+    print(f"[DEBUG] Длина тела (UTF-16): {telegram_len(body)}")
+    print(f"[DEBUG] Первые 200 символов тела:\n{body[:200]}")
+    print(f"[DEBUG] Заголовок: {title}")
+    
     title, body = rewrite_news(title, body, target_len=target_len)
-    print(f"[DEBUG] Текст ПОСЛЕ рерайта: {telegram_len(body)} символов")
-
+    
+    print(f"[DEBUG] === ПОСЛЕ РЕРАЙТА ===")
+    print(f"[DEBUG] Длина тела (UTF-16): {telegram_len(body)}")
+    print(f"[DEBUG] Первые 200 символов тела:\n{body[:200]}")
+    
     # Safety net: если GigaChat недоступен/выключен, всё равно чистим ромадзи в оригинале
     title = strip_romaji_title(title)
     body = strip_romaji_title(body)
@@ -1185,7 +1192,6 @@ def main():
             full_text = strip_romaji_title(full_text)
             full_text = clean_romaji_titles(full_text)
             
-            # Пытаемся восстановить русский заголовок из текста
             russian_title = extract_russian_title_from_text(full_text)
             if russian_title and not re.search(r'[А-Яа-я]', title):
                 title = russian_title
